@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-1.0.0--beta.3-orange.svg)]()
 
 A neural network activation layer based on **parallel transport in pseudo-Euclidean space R³˒³** (signature +,+,+,−,−,−) with a learnable so(3,3) connection.  
 The activation integrates a quadratic ODE – unlike ReLU, Tanh, and other elementwise functions, this layer is geometrically meaningful and naturally respects causal structure.
