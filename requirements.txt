@@ -1,0 +1,7 @@
+torch>=2.0.0
+torchdiffeq>=0.2.0
+numpy>=1.21.0
+
+# Optional — for examples and Jupyter notebook
+matplotlib>=3.5.0
+jupyter>=1.0.0
