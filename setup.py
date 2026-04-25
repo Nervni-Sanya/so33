@@ -7,7 +7,7 @@ setup(
     version="1.0.0",
     description="SO33 Activation: Parallel Transport in Pseudo-Euclidean Space R^{3,3}",
     author="Panchenko Alexander",
-    author_email="",
+    author_email="sascha.panchenko2018@yandex.ru",
     license="MIT",
     packages=find_packages(exclude=["tests*", "examples*"]),
     python_requires=">=3.10",
