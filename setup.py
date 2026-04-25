@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="so33-activation",
-    version="1.0.0",
+    version="1.0.0-beta.3",
     description="SO33 Activation: Parallel Transport in Pseudo-Euclidean Space R^{3,3}",
     author="Panchenko Alexander",
     author_email="sascha.panchenko2018@yandex.ru",
