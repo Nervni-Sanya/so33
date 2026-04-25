@@ -2,38 +2,38 @@
 
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0--beta.3-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-1.0.0-orange.svg)]()
 
-Библиотека нейросетевой активации, основанной на **параллельном переносе в псевдоевклидовом пространстве R³˒³** (сигнатура +,+,+,−,−,−) с обучаемой so(3,3)-связностью.  
-Активация интегрирует квадратичное ОДУ – в отличие от ReLU, Tanh и других поэлементных функций, слой геометрически осмыслен и естественно учитывает причинную структур.
+A neural network activation layer based on **parallel transport in pseudo-Euclidean space R³˒³** (signature +,+,+,−,−,−) with a learnable so(3,3) connection.  
+The activation integrates a quadratic ODE – unlike ReLU, Tanh, and other elementwise functions, this layer is geometrically meaningful and naturally respects causal structure.
 
-## Особенности
+## Features
 
-- **Геометрическая нелинейность** – активация реализована как решение ОДУ с обучаемой связностью в алгебре Ли so(3,3).  
-- **Индефинитная метрика** – сигнатура (+,+,+,−,−,−) разделяет пространственноподобные и времениподобные компоненты. 
-- **Минимальная параметризация** – всего 15 обучаемых коэффициентов (размерность so(3,3)).
-- **Эффективное обратное распространение** – используется метод сопряжённых состояний (Neural ODE), память O(1) относительно длины траектории.   
+- **Geometric nonlinearity** – activation implemented as the solution of an ODE with a learnable so(3,3) Lie algebra connection.  
+- **Indefinite metric** – signature (+,+,+,−,−,−) separates space-like and time-like components.
+- **Minimal parametrization** – only 15 learnable coefficients (dimension of so(3,3)).
+- **Efficient backpropagation** – uses the adjoint method (Neural ODE), O(1) memory with respect to trajectory length.
 
-## Результаты верификации (все 6 тестов)
+## Verification results (all 6 tests)
 
-Ниже – ключевые показатели, полученные при прогоне тестового набора. Каждый тест можно запустить отдельно (`python tests/test_basis.py`) или все сразу (`python -m pytest tests/ -v`).
+Below are key metrics obtained from running the test suite. Each test can be run individually (`python tests/test_basis.py`) or all at once (`python -m pytest tests/ -v`).
 
-| Тест | Что проверялось | Ключевой результат |
-|------|------------------|-------------------|
-| **1. Базис и метрическая совместность** | 15 базисных тензоров, условие η_μ ω[μ,ν,λ] + η_ν ω[ν,μ,λ] = 0 | **0 нарушений** на 9720 компонентах. Ранг = 15 (полный). |
-| **2. Прямой проход** | Форма (4,6) → (4,6), dtype, конечность | Форма и dtype корректны, все значения конечны. |
-| **3. Минимальный шаг обучения** | Linear→SO33→Linear, 1 шаг Adam | Loss упал с **0.5113 до 0.5028**, градиенты ненулевые и конечные. |
-| **4. Сопряжённый vs прямой autograd** | Сравнение градиентов ∂L/∂c_k | Макс. абс. разница **2.1×10⁻¹²**, относительная **6.1×10⁻¹¹**. |
-| **5. Коэффициент регуляризации: штраф за рост нормы тензора связности (предотвращает нестабильность ОДУ)** | L_reg = λ ‖ω‖_F² | При c_k=1 регуляризационный loss = 0.30, градиент течёт. |
+| Test | Description | Status | Details |
+|------|-------------|--------|---------|
+| 1 | Basis construction & metric-connection condition | Pass | 15/15 basis tensors, 0 violations, rank = 15 |
+| 2 | SO33Activation forward pass | Pass | Shape (4,6) → (4,6), norms preserved |
+| 3 | Minimal training step | Pass | MSE 0.511 → 0.503, 64 params |
+| 4 | Adjoint vs Direct autograd consistency | Pass | Max diff 2.10e-12, rel diff 6.08e-11 |
+| 5 | Frobenius regularization | Pass | Reg init 1.98e-5, at c=1: 0.300 |
+| 6 | Synthetic causal classification | Pass | Acc 45.7% → 54.3% (train), 60% → 63.3% (test) |
 
-
-## 🚀 Быстрый старт
+## Quick Start
 
 ```bash
 git clone https://github.com/Nervni-Sanya/so33.git
 cd so33-activation
 pip install -r requirements.txt
-pip install -e .          # установка в режиме разработки
+pip install -e .
 ```
 
 ```python
@@ -48,17 +48,16 @@ net    = SO33Network(in_features=6, out_features=2, T=0.5)
 logits = net(x)            # (8, 2)
 ```
 
-## ⚙️ Параметры `SO33Activation`
+## `SO33Activation` Parameters
 
-| Параметр | Тип | По умолчанию | Описание |
-|----------|-----|:------------:|----------|
-| `T` | `float` | `1.0` | Время интегрирования ОДУ. Меньше T → ближе к линейному режиму. |
-| `method` | `str` | `"dopri5"` | Решатель ОДУ: `"dopri5"`, `"rk4"`, `"euler"`. |
-| `adjoint` | `bool` | `True` | Использовать сопряжённый метод (экономия памяти). `False` для отладки. |
-| `rtol` | `float` | `1e-4` | Относительная точность ОДУ. |
-| `atol` | `float` | `1e-5` | Абсолютная точность ОДУ. |
-| `reg_coef` | `float` | `1e-3` | Коэффициент регуляризации: штраф за рост нормы тензора связности (предотвращает нестабильность ОДУ). |
-
+| Parameter | Type | Default | Description |
+|-----------|------|:-------:|-------------|
+| `T` | `float` | `1.0` | ODE integration time. Smaller T → closer to linear regime. |
+| `method` | `str` | `"dopri5"` | ODE solver: `"dopri5"`, `"rk4"`, `"euler"`. |
+| `adjoint` | `bool` | `True` | Use adjoint method (memory efficient). `False` for debugging. |
+| `rtol` | `float` | `1e-4` | Relative ODE tolerance. |
+| `atol` | `float` | `1e-5` | Absolute ODE tolerance. |
+| `reg_coef` | `float` | `1e-3` | Regularization coefficient: penalty on the connection tensor norm (prevents ODE instability). |
 
 ```python
 from so33 import SO33Activation
@@ -73,12 +72,11 @@ activation = SO33Activation(
 )
 ```
 
-При обучении обязательно добавьте клиппинг градиентов:
+During training, be sure to add gradient clipping:
 
 ```python
 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 ```
 
-## Благодарности
-Для генерации кода, тестирования и подготовки документации использовались языковые модели **Claude (Anthropic)** и **DeepSeek**.
-```
+## Acknowledgements
+The code generation, testing, and documentation were supported by the language models **Claude (Anthropic)** and **DeepSeek**.
