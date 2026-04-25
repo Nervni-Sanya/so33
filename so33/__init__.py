@@ -23,5 +23,5 @@ __all__ = [
     "ODEFunc",
 ]
 
-__version__ = "1.0.0"
+__version__ = "1.0.0-beta.3"
 __author__ = "Panchenko Alexander"
