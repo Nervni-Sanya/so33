@@ -1,11 +1,24 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
-authors:
-  - family-names: "Panchenko"
-    given-names: "Alexander"
-    orcid: "https://orcid.org/0009-0009-9104-1214"
 title: "SO33 Activation: Parallel Transport in Pseudo-Euclidean Space R^{3,3}"
-version: 1.0.0
-doi: 10.5281/zenodo.XXXXXXX
-date-released: 2026-04-24
+abstract: "Библиотека нейросетевой активации, основанной на параллельном переносе в псевдоевклидовом пространстве R^{3,3} (сигнатура +,+,+,−,−,−) с обучаемой so(3,3)-связностью. Реализует слой, интегрирующий квадратичное ОДУ, и включает полный набор тестов."
+authors:
+  - family-names: "Панченко"
+    given-names: "Александр Алексеевич"
+    email: "sascha.panchenko2018@yandex.ru"
+    orcid: "https://orcid.org/0009-0009-9104-1214"
+version: "1.0.0-beta.3"
+date-released: 2025-07-10
 url: "https://github.com/Nervni-Sanya/so33"
+repository-code: "https://github.com/Nervni-Sanya/so33"
+license: "MIT"
+keywords:
+  - "so33"
+  - "pseudo-Euclidean"
+  - "parallel transport"
+  - "neural activation"
+  - "Lie algebra"
+  - "geometric deep learning"
+  - "Python"
+type: software
+doi: "10.5281/zenodo.XXXXXXX"
