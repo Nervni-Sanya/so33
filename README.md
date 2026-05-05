@@ -19,14 +19,14 @@ The activation integrates a quadratic ODE – unlike ReLU, Tanh, and other eleme
 
 Below are key metrics obtained from running the test suite. Each test can be run individually (`python tests/test_basis.py`) or all at once (`python -m pytest tests/ -v`).
 
-| Test | Description | Status | Details |
-|------|-------------|--------|---------|
-| 1 | Basis construction & metric-connection condition | Pass | 15/15 basis tensors, 0 violations, rank = 15 |
-| 2 | SO33Activation forward pass | Pass | Shape (4,6) → (4,6), norms preserved |
-| 3 | Minimal training step | Pass | MSE 0.511 → 0.503, 64 params |
-| 4 | Adjoint vs Direct autograd consistency | Pass | Max diff 2.10e-12, rel diff 6.08e-11 |
-| 5 | Frobenius regularization | Pass | Reg init 1.98e-5, at c=1: 0.300 |
-| 6 | Synthetic causal classification | Pass | Acc 45.7% → 54.3% (train), 60% → 63.3% (test) |
+| Test | Description | Details |
+|------|-------------|---------|
+| 1 | Basis construction & metric-connection condition  | 15/15 basis tensors, 0 violations, rank = 15 |
+| 2 | SO33Activation forward pass  | Shape (4,6) → (4,6), norms preserved |
+| 3 | Minimal training step  | MSE 0.511 → 0.503, 64 params |
+| 4 | Adjoint vs Direct autograd consistency  | Max diff 2.10e-12, rel diff 6.08e-11 |
+| 5 | Frobenius regularization  | Reg init 1.98e-5, at c=1: 0.300 |
+| 6 | Synthetic causal classification  | Acc 45.7% → 54.3% (train), 60% → 63.3% (test) |
 
 ## Quick Start
 
