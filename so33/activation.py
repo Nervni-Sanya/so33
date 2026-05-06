@@ -14,8 +14,9 @@ where v(t) is the solution of the geodesic-like ODE:
 
 Trainable parameters
 --------------------
-    coeffs in R^15  —  the 15 scalar coefficients of the so(3,3) connection basis
-                        (minimal parameterisation, all other entries are derived)
+    coeffs in R^K  —  scalar coefficients of the connection basis.
+        K = 15 for full so(3,3), K = 6 for the so(3) ⊕ so(3) Euclidean
+        ablation (signature_only=True).
 
 Numerical stability (indefinite metric)
 ---------------------------------------
@@ -60,16 +61,30 @@ class SO33Activation(nn.Module):
 
     Parameters
     ----------
-    T        : float   integration horizon  (default 1.0)
-    rtol     : float   ODE relative tolerance  (default 1e-4)
-    atol     : float   ODE absolute tolerance  (default 1e-5)
-    method   : str     ODE solver — 'dopri5' (default), 'rk4', 'euler'
-    adjoint  : bool    True  → adjoint backprop (memory-efficient, recommended)
-                       False → direct autograd (debugging)
-    reg_coef : float   Frobenius regularisation coefficient  (default 1e-3)
+    T              : float   integration horizon  (default 1.0)
+    rtol           : float   ODE relative tolerance  (default 1e-4)
+    atol           : float   ODE absolute tolerance  (default 1e-5)
+    method         : str     ODE solver — 'dopri5' (default), 'rk4', 'euler'
+    adjoint        : bool    True  → adjoint backprop (memory-efficient, recommended)
+                             False → direct autograd (debugging)
+    reg_coef       : float   Frobenius regularisation coefficient  (default 1e-3)
+    dtype          : torch.dtype   parameter and basis dtype (default float64).
+                                   Pass torch.float32 for faster benchmarking
+                                   at the cost of numerical stability under the
+                                   indefinite metric.
+    signature_only : bool    When True, restrict the basis to same-signature
+                             generators (so(3) ⊕ so(3), 6 generators, no
+                             cross-signature Lorentz boosts). Used for the
+                             Euclidean ablation. Default False.
+    freeze_coeffs  : bool    When True, freeze the connection coefficients at
+                             their initial random values so that gradients do
+                             not update them. Used for the "fixed-Γ" ablation
+                             which isolates whether *learning* the connection
+                             matters versus simply having geometric structure.
+                             Default False.
 
-    Input  : (B, 6) float32 or float64  — cast to float64 internally
-    Output : (B, 6) float64
+    Input  : (B, 6) tensor — cast to the layer dtype internally.
+    Output : (B, 6) tensor in the layer dtype.
     """
 
     def __init__(
@@ -80,29 +95,35 @@ class SO33Activation(nn.Module):
         method: str     = "dopri5",
         adjoint: bool   = True,
         reg_coef: float = 1e-3,
+        dtype: torch.dtype = torch.float64,
+        signature_only: bool = False,
+        freeze_coeffs: bool = False,
     ) -> None:
         super().__init__()
 
-        self.T        = T
-        self.rtol     = rtol
-        self.atol     = atol
-        self.method   = method
-        self.adjoint  = adjoint
-        self.reg_coef = reg_coef
-
-        # ── Trainable parameters: 15 so(3,3) connection coefficients ──────────
-        # Small init keeps the ODE near-identity at the start of training.
-        self.coeffs = nn.Parameter(
-            torch.randn(N_BASIS, dtype=torch.float64) * 0.01
-        )
+        self.T              = T
+        self.rtol           = rtol
+        self.atol           = atol
+        self.method         = method
+        self.adjoint        = adjoint
+        self.reg_coef       = reg_coef
+        self.dtype          = dtype
+        self.signature_only = signature_only
 
         # ── Fixed basis (non-trainable, moves with .to(device)) ───────────────
-        self.register_buffer("basis_stack", get_basis_stack())   # (15, 6, 6, 6)
+        basis = get_basis_stack(dtype=dtype, signature_only=signature_only)
+        self.register_buffer("basis_stack", basis)               # (K, 6, 6, 6)
+        n_coeffs = basis.shape[0]
+
+        # ── Trainable parameters: K connection coefficients ───────────────────
+        # Small init keeps the ODE near-identity at the start of training.
+        coeffs = torch.randn(n_coeffs, dtype=dtype) * 0.01
+        self.coeffs = nn.Parameter(coeffs, requires_grad=not freeze_coeffs)
 
         # ── Time integration interval ─────────────────────────────────────────
         self.register_buffer(
             "t_span",
-            torch.tensor([0.0, T], dtype=torch.float64),
+            torch.tensor([0.0, T], dtype=dtype),
         )
 
     # ── Stability helpers ─────────────────────────────────────────────────────
@@ -134,9 +155,9 @@ class SO33Activation(nn.Module):
 
         Returns
         -------
-        y : (B, 6) float64 tensor — terminal state v(T)
+        y : (B, 6) tensor — terminal state v(T), in self.dtype
         """
-        x     = x.double()           # ensure float64 for ODE solver
+        x     = x.to(self.dtype)
         scale = self._adaptive_scale()
 
         # Precompute omega once per forward — coeffs are constant during a
@@ -174,7 +195,16 @@ class SO33Activation(nn.Module):
         return v_traj[-1]   # v(T), shape (B, 6)
 
     def extra_repr(self) -> str:
+        flags = []
+        if self.signature_only:
+            flags.append("signature_only=True")
+        if not self.coeffs.requires_grad:
+            flags.append("freeze_coeffs=True")
+        if self.dtype != torch.float64:
+            flags.append(f"dtype={self.dtype}")
+        extras = (", " + ", ".join(flags)) if flags else ""
         return (
             f"T={self.T}, method={self.method}, "
-            f"adjoint={self.adjoint}, n_params={N_BASIS}"
+            f"adjoint={self.adjoint}, n_params={self.coeffs.numel()}"
+            f"{extras}"
         )
