@@ -139,11 +139,15 @@ class SO33Activation(nn.Module):
         x     = x.double()           # ensure float64 for ODE solver
         scale = self._adaptive_scale()
 
-        ode_func = ODEFunc(
-            coeffs=self.coeffs,
-            basis_stack=self.basis_stack,
-            scale=scale,
-        )
+        # Precompute omega once per forward — coeffs are constant during a
+        # single ODE solve, so reusing the same tensor across solver steps
+        # saves an einsum per step. Autograd still traces back to coeffs
+        # via the non-leaf omega tensor.
+        omega = get_connection_tensor(self.coeffs, self.basis_stack)
+        if scale != 1.0:
+            omega = omega * scale
+
+        ode_func = ODEFunc(omega=omega)
 
         if self.adjoint:
             # Approach A: memory-efficient continuous adjoint
