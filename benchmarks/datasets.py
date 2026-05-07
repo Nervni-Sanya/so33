@@ -231,8 +231,12 @@ def load_top_tagging(
     if not npz_files:
         raise FileNotFoundError(
             f"No top_tagging_*.npz files in {cache}. "
-            f"Download from {TOP_TAGGING_URL} and convert to npz with "
-            f"keys 'constituents' (n_jets, max_particles, 4) and 'labels' (n_jets,)."
+            f"Easiest path: fetch the Hugging Face mirror and convert in one step:\n"
+            f"  pip install huggingface_hub pandas pyarrow tables\n"
+            f"  python -m benchmarks.download_top_tagging --cache-dir {cache}\n"
+            f"Or download parquet/h5 manually from "
+            f"https://huggingface.co/datasets/dl4phys/top_tagging/tree/main "
+            f"into {cache} and convert with --skip-download."
         )
 
     Xs, ys = [], []
