@@ -97,6 +97,77 @@ def render_dataeff(groups: dict[tuple[str, str], list[dict]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
+    """Render real-data tabular experiments (HIGGS / Top Tagging / Neutral).
+
+    Splits each experiment into matched-bottleneck and natural-width
+    sub-tables based on the per-record ``family`` field. Reports
+    val_acc, test_acc, and AUC (when present).
+    """
+    tabular_experiments: dict[str, list[dict]] = defaultdict(list)
+    for (exp, _model), recs in groups.items():
+        for r in recs:
+            if "family" in r and "test_metrics" in r:
+                tabular_experiments[exp].append(r)
+
+    if not tabular_experiments:
+        return ""
+
+    out_lines: list[str] = []
+    for exp in sorted(tabular_experiments.keys()):
+        records = tabular_experiments[exp]
+        out_lines.append(f"## {exp}")
+        out_lines.append("")
+        for family in ("matched_bottleneck", "natural_width"):
+            family_recs = [r for r in records if r["family"] == family]
+            if not family_recs:
+                continue
+            by_model: dict[str, list[dict]] = defaultdict(list)
+            for r in family_recs:
+                by_model[r["model"]].append(r)
+
+            has_auc = any(r["test_metrics"].get("test_auc") is not None
+                          for r in family_recs)
+
+            label = "matched bottleneck (hidden=6)" if family == "matched_bottleneck" else "natural width MLPs"
+            out_lines.append(f"### {label}")
+            out_lines.append("")
+            header_cells = ["model", "n_seeds", "params", "val_acc", "test_acc"]
+            if has_auc:
+                header_cells.append("test_auc")
+            out_lines.append("| " + " | ".join(header_cells) + " |")
+            out_lines.append("|" + "|".join(["---"] + ["---:"] * (len(header_cells) - 1)) + "|")
+
+            rows = []
+            for model, recs in by_model.items():
+                n_params  = recs[0]["n_params"]
+                val_acc   = _mean_std([r["train_metrics"]["final_val_acc"] for r in recs])
+                test_acc  = _mean_std([r["test_metrics"]["test_acc"]       for r in recs])
+                if has_auc:
+                    test_auc = _mean_std([r["test_metrics"]["test_auc"]
+                                          for r in recs
+                                          if r["test_metrics"].get("test_auc") is not None])
+                else:
+                    test_auc = None
+                rows.append((model, len(recs), n_params, val_acc, test_acc, test_auc))
+
+            sort_key = -1
+            if has_auc:
+                rows.sort(key=lambda r: -(r[5][0] if r[5] else -1))
+            else:
+                rows.sort(key=lambda r: -r[4][0])
+
+            for model, n, p, v, t, a in rows:
+                cells = [model, str(n), str(p),
+                         f"{v[0]:.3f}±{v[1]:.3f}",
+                         f"{t[0]:.3f}±{t[1]:.3f}"]
+                if has_auc:
+                    cells.append(f"{a[0]:.3f}±{a[1]:.3f}" if a else "—")
+                out_lines.append("| " + " | ".join(cells) + " |")
+            out_lines.append("")
+    return "\n".join(out_lines)
+
+
 def render_ood(groups: dict[tuple[str, str], list[dict]]) -> str:
     rows = []
     for (exp, model), recs in groups.items():
@@ -150,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     parts.append(render_equivariance(groups))
     parts.append(render_dataeff(groups))
     parts.append(render_ood(groups))
+    parts.append(render_tabular(groups))
     out = "\n".join(p for p in parts if p)
 
     print(out)
