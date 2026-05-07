@@ -33,6 +33,9 @@ class SO33Network(nn.Module):
     dtype        : torch.dtype  parameter dtype (default float64)
     signature_only : bool       restrict to so(3) ⊕ so(3) (Euclidean ablation)
     freeze_coeffs  : bool       freeze the connection coefficients (fixed-Γ ablation)
+    bound_input    : bool       bound the activation input magnitude (default
+                                True) to keep the indefinite-metric ODE stable
+                                on real inputs of arbitrary scale.
 
     Example
     -------
@@ -51,6 +54,7 @@ class SO33Network(nn.Module):
         dtype:        torch.dtype = torch.float64,
         signature_only: bool = False,
         freeze_coeffs:  bool = False,
+        bound_input:    bool = True,
     ) -> None:
         super().__init__()
         self.dtype = dtype
@@ -61,6 +65,7 @@ class SO33Network(nn.Module):
             dtype=dtype,
             signature_only=signature_only,
             freeze_coeffs=freeze_coeffs,
+            bound_input=bound_input,
         )
         self.output_proj = nn.Linear(DIM, out_features).to(dtype)
 

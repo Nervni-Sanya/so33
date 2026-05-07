@@ -82,6 +82,20 @@ class SO33Activation(nn.Module):
                              which isolates whether *learning* the connection
                              matters versus simply having geometric structure.
                              Default False.
+    bound_input    : bool    When True, normalise each input vector to a
+                             bounded magnitude before integration:
+                                 x' = x / (1 + ||x||_2)
+                             so ||x'|| < 1. The geodesic ODE under an
+                             indefinite metric can diverge exponentially,
+                             which makes the adaptive solver fail with
+                             ``underflow in dt`` on real-data inputs (e.g.
+                             standardised tabular features through a Linear
+                             projection). Bounding the initial state keeps
+                             ||v||² in check throughout the integration.
+                             Default False (preserves the analytical
+                             behaviour expected by the existing tests; the
+                             SO33Network convenience wrapper enables it by
+                             default).
 
     Input  : (B, 6) tensor — cast to the layer dtype internally.
     Output : (B, 6) tensor in the layer dtype.
@@ -98,6 +112,7 @@ class SO33Activation(nn.Module):
         dtype: torch.dtype = torch.float64,
         signature_only: bool = False,
         freeze_coeffs: bool = False,
+        bound_input: bool = False,
     ) -> None:
         super().__init__()
 
@@ -109,6 +124,7 @@ class SO33Activation(nn.Module):
         self.reg_coef       = reg_coef
         self.dtype          = dtype
         self.signature_only = signature_only
+        self.bound_input    = bound_input
 
         # ── Fixed basis (non-trainable, moves with .to(device)) ───────────────
         basis = get_basis_stack(dtype=dtype, signature_only=signature_only)
@@ -157,7 +173,16 @@ class SO33Activation(nn.Module):
         -------
         y : (B, 6) tensor — terminal state v(T), in self.dtype
         """
-        x     = x.to(self.dtype)
+        x = x.to(self.dtype)
+        if self.bound_input:
+            # Bound ||x||_2 < 1 so ||v||² stays manageable through the ODE.
+            # Without this the indefinite-metric trajectory can blow up
+            # exponentially on inputs of moderate magnitude (e.g. standardised
+            # tabular features through a Linear), causing the adaptive solver
+            # to underflow dt to zero. Differentiable; trains end-to-end.
+            x_norm = x.norm(dim=-1, keepdim=True)
+            x = x / (1.0 + x_norm)
+
         scale = self._adaptive_scale()
 
         # Precompute omega once per forward — coeffs are constant during a
