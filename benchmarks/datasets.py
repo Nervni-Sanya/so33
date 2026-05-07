@@ -137,17 +137,27 @@ def load_higgs(
     seed        : RNG seed for the train/val/test split.
     standardise : z-score with train-set statistics (recommended).
     """
-    path = pathlib.Path(cache_dir) / HIGGS_FILENAME
-    if not path.is_file():
+    cache = pathlib.Path(cache_dir)
+    candidates = [cache / HIGGS_FILENAME, cache / "HIGGS.csv"]
+    path = next((p for p in candidates if p.is_file()), None)
+    if path is None:
         raise FileNotFoundError(
-            f"HIGGS dataset not found at {path}. "
-            f"Download with:\n  curl -L {HIGGS_URL} -o {path}"
+            f"HIGGS dataset not found in {cache}. "
+            f"Expected HIGGS.csv.gz or HIGGS.csv. "
+            f"Download with:\n  curl -L {HIGGS_URL} -o {cache / HIGGS_FILENAME}"
         )
 
-    # The HIGGS file: column 0 is the binary label (0/1), columns 1..28
-    # are features.
+    # Auto-detect: real gzip files start with magic bytes 1f 8b. Some
+    # mirrors serve the decompressed CSV with a misleading .csv.gz
+    # extension, so check the bytes rather than trusting the suffix.
+    with open(path, "rb") as fb:
+        is_gzipped = fb.read(2) == b"\x1f\x8b"
+
+    opener = gzip.open if is_gzipped else open
+
+    # Column 0 is the binary label (0/1); columns 1..28 are features.
     rows = []
-    with gzip.open(path, "rt") as f:
+    with opener(path, "rt") as f:
         for i, line in enumerate(f):
             if max_samples is not None and i >= max_samples:
                 break
@@ -228,31 +238,55 @@ def load_top_tagging(
     """
     cache = pathlib.Path(cache_dir)
     npz_files = sorted(cache.glob("top_tagging_*.npz"))
+
+    # Fallback: if no preconverted npz files but parquet/h5 from the HF
+    # mirror are present, load directly without round-tripping through npz.
+    raw_files: list[pathlib.Path] = []
     if not npz_files:
+        for ext in ("*.parquet", "*.h5"):
+            raw_files.extend(sorted(cache.glob(ext)))
+
+    if not npz_files and not raw_files:
         raise FileNotFoundError(
-            f"No top_tagging_*.npz files in {cache}. "
-            f"Easiest path: fetch the Hugging Face mirror and convert in one step:\n"
+            f"No top_tagging_*.npz, *.parquet, or *.h5 in {cache}. "
+            f"Easiest path: fetch the Hugging Face mirror in one step:\n"
             f"  pip install huggingface_hub pandas pyarrow tables\n"
             f"  python -m benchmarks.download_top_tagging --cache-dir {cache}\n"
             f"Or download parquet/h5 manually from "
             f"https://huggingface.co/datasets/dl4phys/top_tagging/tree/main "
-            f"into {cache} and convert with --skip-download."
+            f"into {cache}; this loader will detect them automatically."
         )
 
     Xs, ys = [], []
     seen = 0
-    for path in npz_files:
-        if max_samples is not None and seen >= max_samples:
-            break
-        data = np.load(path)
-        cs = data["constituents"]
-        ls = data["labels"]
-        for i in range(len(cs)):
+
+    if npz_files:
+        for path in npz_files:
             if max_samples is not None and seen >= max_samples:
                 break
-            Xs.append(aggregate_jet_to_6d(cs[i]))
-            ys.append(int(ls[i]))
-            seen += 1
+            data = np.load(path)
+            cs = data["constituents"]
+            ls = data["labels"]
+            for i in range(len(cs)):
+                if max_samples is not None and seen >= max_samples:
+                    break
+                Xs.append(aggregate_jet_to_6d(cs[i]))
+                ys.append(int(ls[i]))
+                seen += 1
+    else:
+        # Direct path: parse HF parquet/h5 in the canonical Kasieczka layout.
+        from .download_top_tagging import _load_dataframe, _df_to_constituents_labels
+        for path in raw_files:
+            if max_samples is not None and seen >= max_samples:
+                break
+            df = _load_dataframe(path)
+            cs, ls = _df_to_constituents_labels(df)
+            for i in range(len(cs)):
+                if max_samples is not None and seen >= max_samples:
+                    break
+                Xs.append(aggregate_jet_to_6d(cs[i]))
+                ys.append(int(ls[i]))
+                seen += 1
 
     X = torch.from_numpy(np.stack(Xs))
     y = torch.tensor(ys, dtype=torch.long)
