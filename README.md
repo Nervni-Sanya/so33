@@ -80,4 +80,4 @@ torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 ```
 
 ## Acknowledgements
-The code generation, testing, and documentation were supported by the language models **Claude (Anthropic)** and **DeepSeek**.
+The code generation, testing, and documentation were supported by the language models **Claude (Anthropic)**.
