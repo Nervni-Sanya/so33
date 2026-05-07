@@ -93,6 +93,8 @@ def build_model(
     natural_hidden: int = 256,
     dtype: torch.dtype = torch.float64,
     adjoint: bool = True,
+    so33_method: str = "rk4",
+    so33_step_size: float | None = None,
 ) -> nn.Module:
     """Construct a model by string name.
 
@@ -113,20 +115,36 @@ def build_model(
     -------
     nn.Module with ``forward(x)`` and ``regularization_loss()``.
     """
+    # SO33 variants: default to fixed-step rk4 in the benchmark harness.
+    # Real-data inputs (HIGGS 28-d, Adult 14-d, Top-Tagging jets) push the
+    # connection coefficients into a regime where the indefinite-metric
+    # geodesic ODE diverges fast enough that adaptive dopri5 underflows
+    # dt to zero. rk4 with a small fixed step never underflows, runs in
+    # O(T/step) RHS evals, and is plenty accurate for classification.
+    if so33_method == "rk4":
+        step = so33_step_size if so33_step_size is not None else max(T / 10.0, 1e-3)
+        so33_kwargs = dict(method="rk4", solver_options={"step_size": step})
+    else:
+        so33_kwargs = dict(method=so33_method)
+        if so33_step_size is not None:
+            so33_kwargs["solver_options"] = {"step_size": so33_step_size}
+
     if name == "so33":
         return SO33Network(
             in_features=in_features, out_features=out_features,
-            T=T, adjoint=adjoint, dtype=dtype,
+            T=T, adjoint=adjoint, dtype=dtype, **so33_kwargs,
         )
     if name == "so33_signature_only":
         return SO33Network(
             in_features=in_features, out_features=out_features,
             T=T, adjoint=adjoint, dtype=dtype, signature_only=True,
+            **so33_kwargs,
         )
     if name == "so33_frozen":
         return SO33Network(
             in_features=in_features, out_features=out_features,
             T=T, adjoint=adjoint, dtype=dtype, freeze_coeffs=True,
+            **so33_kwargs,
         )
 
     pointwise: dict[str, Callable[[], nn.Module]] = {

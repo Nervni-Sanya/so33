@@ -113,6 +113,7 @@ class SO33Activation(nn.Module):
         signature_only: bool = False,
         freeze_coeffs: bool = False,
         bound_input: bool = False,
+        solver_options: dict | None = None,
     ) -> None:
         super().__init__()
 
@@ -125,6 +126,7 @@ class SO33Activation(nn.Module):
         self.dtype          = dtype
         self.signature_only = signature_only
         self.bound_input    = bound_input
+        self.solver_options = dict(solver_options) if solver_options else None
 
         # ── Fixed basis (non-trainable, moves with .to(device)) ───────────────
         basis = get_basis_stack(dtype=dtype, signature_only=signature_only)
@@ -204,6 +206,7 @@ class SO33Activation(nn.Module):
                 rtol=self.rtol,
                 atol=self.atol,
                 method=self.method,
+                options=self.solver_options,
                 adjoint_params=tuple(self.parameters()),
             )
         else:
@@ -215,6 +218,7 @@ class SO33Activation(nn.Module):
                 rtol=self.rtol,
                 atol=self.atol,
                 method=self.method,
+                options=self.solver_options,
             )
 
         return v_traj[-1]   # v(T), shape (B, 6)

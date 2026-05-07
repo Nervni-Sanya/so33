@@ -33,9 +33,11 @@ class SO33Network(nn.Module):
     dtype        : torch.dtype  parameter dtype (default float64)
     signature_only : bool       restrict to so(3) ⊕ so(3) (Euclidean ablation)
     freeze_coeffs  : bool       freeze the connection coefficients (fixed-Γ ablation)
-    bound_input    : bool       bound the activation input magnitude (default
-                                True) to keep the indefinite-metric ODE stable
-                                on real inputs of arbitrary scale.
+    bound_input    : bool       optional input-magnitude bound (default False).
+    method         : str        ODE solver, e.g. "dopri5" (default; adaptive)
+                                or "rk4" (fixed-step, robust on real data).
+    solver_options : dict|None  Forwarded to torchdiffeq odeint as ``options=``.
+                                For method="rk4" pass {"step_size": 0.05}.
 
     Example
     -------
@@ -54,18 +56,21 @@ class SO33Network(nn.Module):
         dtype:        torch.dtype = torch.float64,
         signature_only: bool = False,
         freeze_coeffs:  bool = False,
-        bound_input:    bool = True,
+        bound_input:    bool = False,
+        method:         str  = "dopri5",
+        solver_options: dict | None = None,
     ) -> None:
         super().__init__()
         self.dtype = dtype
 
         self.input_proj  = nn.Linear(in_features, DIM).to(dtype)
         self.activation  = SO33Activation(
-            T=T, adjoint=adjoint, method="dopri5", rtol=1e-4, atol=1e-5,
+            T=T, adjoint=adjoint, method=method, rtol=1e-4, atol=1e-5,
             dtype=dtype,
             signature_only=signature_only,
             freeze_coeffs=freeze_coeffs,
             bound_input=bound_input,
+            solver_options=solver_options,
         )
         self.output_proj = nn.Linear(DIM, out_features).to(dtype)
 
