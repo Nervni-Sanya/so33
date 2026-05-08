@@ -50,14 +50,40 @@ SPLIT_FILES = {
 def _load_dataframe(path: pathlib.Path):
     """Load either parquet or h5 into a pandas DataFrame (lazy import)."""
     import pandas as pd
-    if path.suffix == ".parquet":
-        return pd.read_parquet(path)
-    if path.suffix == ".h5":
-        # The original release uses pd.read_hdf with key "table".
-        try:
-            return pd.read_hdf(path, key="table")
-        except (KeyError, ValueError):
-            return pd.read_hdf(path)
+
+    # Detect Git-LFS pointer files / partial downloads up front so the
+    # user gets a useful "rerun the download script" message instead of
+    # an opaque HDF5 superblock traceback. Real splits are 100 MB+; LFS
+    # pointers are ~130 bytes, partials a few KiB.
+    size = path.stat().st_size if path.exists() else 0
+    if size < 4096:
+        raise RuntimeError(
+            f"{path.name} is only {size} bytes — looks like a Git LFS "
+            f"pointer or a partial download, not the actual dataset.\n"
+            f"Rerun:\n"
+            f"  pip install huggingface_hub\n"
+            f"  python -m benchmarks.download_top_tagging "
+            f"--cache-dir {path.parent}\n"
+            f"which fetches via huggingface_hub and handles LFS automatically."
+        )
+
+    try:
+        if path.suffix == ".parquet":
+            return pd.read_parquet(path)
+        if path.suffix == ".h5":
+            try:
+                return pd.read_hdf(path, key="table")
+            except (KeyError, ValueError):
+                return pd.read_hdf(path)
+    except Exception as e:
+        # Above size-check usually catches malformed files, but fall through
+        # for size > 4 KiB yet still corrupt (e.g. truncated mid-file).
+        raise RuntimeError(
+            f"Failed to read {path.name} ({size} bytes): {type(e).__name__}: {e}\n"
+            f"If the file looks corrupt, re-fetch with:\n"
+            f"  python -m benchmarks.download_top_tagging "
+            f"--cache-dir {path.parent}"
+        ) from e
     raise ValueError(f"Unsupported file format: {path}")
 
 

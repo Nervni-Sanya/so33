@@ -83,6 +83,18 @@ def _split_train_val_test(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor,
            torch.Tensor, torch.Tensor, torch.Tensor]:
     """Shuffle and split into (train, val, test). The remainder goes to test."""
+    # Catch silent label-collapse early. A misdecoded target column (e.g.
+    # bytes-vs-str on Adult) produces a constant `y`, which trains every
+    # model down to majority-class baseline and looks like an architecture
+    # failure unless you happen to notice all 9 baselines hit the exact
+    # same accuracy. One assert here saves a 30-minute run.
+    if y.numel() > 0 and y.min().item() == y.max().item():
+        raise ValueError(
+            f"Labels are constant ({torch.unique(y).tolist()}); training "
+            f"cannot proceed. The target column was almost certainly "
+            f"decoded incorrectly upstream of _split_train_val_test."
+        )
+
     n = len(X)
     g = torch.Generator().manual_seed(seed)
     perm = torch.randperm(n, generator=g)
@@ -321,7 +333,22 @@ def load_neutral_tabular(seed: int = 0, standardise: bool = True) -> DatasetSpli
     try:
         bunch = skd.fetch_openml("adult", version=2, as_frame=False, parser="liac-arff")
         X_np = np.asarray(bunch.data, dtype=np.float32)
-        y_np = (np.asarray(bunch.target) == ">50K").astype(np.int64)
+        # OpenML's liac-arff parser returns the target as bytes
+        # (b'<=50K' / b'>50K') or integer category codes (0/1) — never as
+        # str — so a naive `target == ">50K"` collapses to all-False and
+        # turns Adult into a degenerate one-class problem. Decode + strip
+        # to normalise across encodings, including the trailing '.' that
+        # the original UCI ARFF distribution embeds (">50K." vs ">50K").
+        target = np.asarray(bunch.target)
+        if np.issubdtype(target.dtype, np.integer):
+            y_np = target.astype(np.int64)
+        else:
+            target_str = np.array([
+                (t.decode() if isinstance(t, (bytes, bytearray)) else str(t))
+                .strip().rstrip('.')
+                for t in target
+            ])
+            y_np = (target_str == ">50K").astype(np.int64)
     except Exception:
         bunch = skd.load_breast_cancer()
         X_np = bunch.data.astype(np.float32)
