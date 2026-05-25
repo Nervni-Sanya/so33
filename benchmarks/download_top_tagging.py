@@ -164,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     source = pathlib.Path(args.source_dir) if args.source_dir else cache
     splits = [s.strip() for s in args.splits.split(",") if s.strip()]
 
+    n_converted = 0
     for split in splits:
         if split not in SPLIT_FILES:
             print(f"[skip] unknown split: {split}", file=sys.stderr)
@@ -179,31 +180,43 @@ def main(argv: list[str] | None = None) -> int:
                     local_path = cand
                     break
             if local_path is None:
-                print(f"[error] {split}: none of {candidates} found in {source}",
+                # Missing splits are non-fatal: the loader splits whatever
+                # it finds into train/val/test, and some mirrors (e.g.
+                # dl4phys/top_tagging) only ship a subset of the canonical
+                # files. Warn and move on.
+                print(f"[skip] {split}: none of {candidates} found in {source}",
                       file=sys.stderr)
-                return 1
+                continue
         else:
             print(f"[{split}] downloading from Hugging Face ({args.repo}) ...")
             try:
                 local_path = _download_one(args.repo, candidates, cache)
             except Exception as e:    # pragma: no cover
-                print(f"[error] {split}: {e}", file=sys.stderr)
-                print(f"  Try downloading manually from "
-                      f"https://huggingface.co/datasets/{args.repo}/tree/main "
-                      f"into {cache} and rerun with --skip-download.",
+                print(f"[skip] {split}: not available in {args.repo} ({e}).",
                       file=sys.stderr)
-                return 1
+                continue
 
         print(f"[{split}] converting {local_path.name} -> npz ...")
         df = _load_dataframe(local_path)
         constituents, labels = _df_to_constituents_labels(df)
         out = cache / f"top_tagging_{split}.npz"
         np.savez_compressed(out, constituents=constituents, labels=labels)
+        n_converted += 1
         print(f"   {out.name}  shape={constituents.shape}  "
               f"signal={(labels == 1).sum()}/{len(labels)}")
 
-    print("\n[done] now run:")
-    print(f"  python -m benchmarks.run_top_tagging --cache-dir {cache} --epochs 30")
+    if n_converted == 0:
+        print("\n[error] no splits were downloaded or converted. Check the "
+              "repo id / network and try again, or download manually from "
+              f"https://huggingface.co/datasets/{args.repo}/tree/main",
+              file=sys.stderr)
+        return 1
+
+    print(f"\n[done] converted {n_converted} split(s). The loader splits "
+          "whatever it finds into train/val/test, so a single train file "
+          "is sufficient. Now run:")
+    print(f"  python -m benchmarks.run_top_tagging --cache-dir {cache} "
+          f"--representation constituents --epochs 30")
     return 0
 
 

@@ -28,7 +28,9 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .datasets import load_top_tagging, synthetic_tabular
+from .datasets import (
+    load_top_tagging, load_top_tagging_constituents, synthetic_tabular,
+)
 from .tabular_runner import run_tabular_experiment
 
 
@@ -43,6 +45,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--epochs",      type=int, default=30)
     p.add_argument("--results-dir", type=str, default="results")
     p.add_argument("--models",      type=str, default=None)
+    p.add_argument("--representation", choices=["aggregated", "constituents"],
+                   default="aggregated",
+                   help="aggregated: jet-level 6-D summary (secondary baseline; "
+                        "saturates because it hands every model the jet mass). "
+                        "constituents: per-particle Deep Sets (headline experiment "
+                        "where the geometric prior can use substructure).")
+    p.add_argument("--n-constituents", type=int, default=32,
+                   help="Leading constituents per jet (constituents mode only).")
     args = p.parse_args(argv)
 
     if args.quick:
@@ -51,12 +61,22 @@ def main(argv: list[str] | None = None) -> int:
                                   seed=args.seed)
         epochs = 5
         experiment = "top_tagging_quick"
+        rep = "flat"
+    elif args.representation == "constituents":
+        split = load_top_tagging_constituents(
+            cache_dir=args.cache_dir, max_samples=args.max_samples,
+            n_constituents=args.n_constituents, seed=args.seed, standardise=True,
+        )
+        epochs = args.epochs
+        experiment = "top_tagging_constituents"
+        rep = "constituents"
     else:
         split = load_top_tagging(cache_dir=args.cache_dir,
                                  max_samples=args.max_samples,
                                  seed=args.seed, standardise=True)
         epochs = args.epochs
         experiment = "top_tagging"
+        rep = "flat"
 
     models = (
         [m.strip() for m in args.models.split(",")] if args.models
@@ -68,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         split=split,
         seed=args.seed,
         epochs=epochs,
+        representation=rep,
         results_dir=args.results_dir,
     )
     if models is not None:

@@ -68,6 +68,7 @@ def run_tabular_experiment(
     lr: float = 3e-3,
     natural_hidden: int = 256,
     T: float = 0.3,
+    representation: str = "flat",
     results_dir: pathlib.Path | str = "results",
 ) -> list[dict]:
     """Train a set of model variants on ``split`` and write one JSON per run.
@@ -93,6 +94,7 @@ def run_tabular_experiment(
             out_features = split.n_classes,
             T = T,
             natural_hidden = natural_hidden,
+            representation = representation,
         )
         cfg = TrainConfig(
             epochs=epochs, batch_size=batch_size, lr=lr,

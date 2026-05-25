@@ -230,29 +230,16 @@ def aggregate_jet_to_6d(constituents: np.ndarray) -> np.ndarray:
     return np.array([px, py, pz, E, m, pT], dtype=np.float32)
 
 
-def load_top_tagging(
-    cache_dir: pathlib.Path | str,
-    max_samples: int | None = 100_000,
-    seed: int = 0,
-    standardise: bool = True,
-) -> DatasetSplit:
-    """Load the Top Tagging Reference dataset, aggregated per jet to 6-D.
+def _iter_top_tagging_jets(cache: pathlib.Path, max_samples: int | None):
+    """Yield (constituents (n_particles, 4), label) for each jet in cache.
 
-    Expects ``top_tagging_*.npz`` files in ``cache_dir`` with the
-    layout described in the Zenodo record (arXiv:1902.09914). Each
-    npz must contain ``constituents`` of shape
-    (n_jets, max_particles, 4) and ``labels`` of shape (n_jets,).
-
-    See ``aggregate_jet_to_6d`` for the per-jet reduction.
-
-    The Zenodo dataset is hosted as HDF5; you may want to convert it
-    to npz once and keep that around. This loader expects the npz.
+    Reads preconverted ``top_tagging_*.npz`` first; falls back to parsing
+    HF parquet/h5 in the canonical Kasieczka layout. Shared by the
+    aggregated (``load_top_tagging``) and per-constituent
+    (``load_top_tagging_constituents``) loaders so the file handling
+    lives in one place.
     """
-    cache = pathlib.Path(cache_dir)
     npz_files = sorted(cache.glob("top_tagging_*.npz"))
-
-    # Fallback: if no preconverted npz files but parquet/h5 from the HF
-    # mirror are present, load directly without round-tripping through npz.
     raw_files: list[pathlib.Path] = []
     if not npz_files:
         for ext in ("*.parquet", "*.h5"):
@@ -269,36 +256,60 @@ def load_top_tagging(
             f"into {cache}; this loader will detect them automatically."
         )
 
-    Xs, ys = [], []
     seen = 0
-
     if npz_files:
         for path in npz_files:
             if max_samples is not None and seen >= max_samples:
-                break
+                return
             data = np.load(path)
-            cs = data["constituents"]
-            ls = data["labels"]
+            cs, ls = data["constituents"], data["labels"]
             for i in range(len(cs)):
                 if max_samples is not None and seen >= max_samples:
-                    break
-                Xs.append(aggregate_jet_to_6d(cs[i]))
-                ys.append(int(ls[i]))
+                    return
+                yield cs[i], int(ls[i])
                 seen += 1
     else:
-        # Direct path: parse HF parquet/h5 in the canonical Kasieczka layout.
         from .download_top_tagging import _load_dataframe, _df_to_constituents_labels
         for path in raw_files:
             if max_samples is not None and seen >= max_samples:
-                break
+                return
             df = _load_dataframe(path)
             cs, ls = _df_to_constituents_labels(df)
             for i in range(len(cs)):
                 if max_samples is not None and seen >= max_samples:
-                    break
-                Xs.append(aggregate_jet_to_6d(cs[i]))
-                ys.append(int(ls[i]))
+                    return
+                yield cs[i], int(ls[i])
                 seen += 1
+
+
+def load_top_tagging(
+    cache_dir: pathlib.Path | str,
+    max_samples: int | None = 100_000,
+    seed: int = 0,
+    standardise: bool = True,
+) -> DatasetSplit:
+    """Load the Top Tagging Reference dataset, aggregated per jet to 6-D.
+
+    Expects ``top_tagging_*.npz`` files in ``cache_dir`` with the
+    layout described in the Zenodo record (arXiv:1902.09914). Each
+    npz must contain ``constituents`` of shape
+    (n_jets, max_particles, 4) and ``labels`` of shape (n_jets,).
+
+    See ``aggregate_jet_to_6d`` for the per-jet reduction.
+
+    NOTE: this aggregated representation hands every model the jet
+    invariant mass — the dominant top-tagging discriminant — so all
+    architectures saturate near the same AUC. Use it as a secondary
+    "given Lorentz-invariant features" baseline; the headline
+    experiment is ``load_top_tagging_constituents`` +
+    ``run_top_tagging --representation constituents``, which preserves
+    the per-particle substructure that the geometric prior can exploit.
+    """
+    cache = pathlib.Path(cache_dir)
+    Xs, ys = [], []
+    for cs, label in _iter_top_tagging_jets(cache, max_samples):
+        Xs.append(aggregate_jet_to_6d(cs))
+        ys.append(label)
 
     X = torch.from_numpy(np.stack(Xs))
     y = torch.tensor(ys, dtype=torch.long)
@@ -313,6 +324,96 @@ def load_top_tagging(
         X_test=Xte,  y_test=yte,
         name="top_tagging",
         n_features=Xtr.shape[1],
+        n_classes=2,
+    )
+
+
+def select_leading_constituents(constituents: np.ndarray, k: int) -> np.ndarray:
+    """Return the leading-k constituents by transverse momentum, padded to k.
+
+    Top-tagging substructure lives in the highest-pT constituents, so we
+    keep the k hardest and zero-pad jets with fewer than k particles.
+
+    Parameters
+    ----------
+    constituents : (n_particles, 4) array of (E, px, py, pz).
+    k            : number of constituents to keep.
+
+    Returns
+    -------
+    (k, 4) float32 array, sorted by descending pT, zero-padded.
+    """
+    if constituents.size == 0:
+        return np.zeros((k, 4), dtype=np.float32)
+    px, py = constituents[:, 1], constituents[:, 2]
+    pT = np.sqrt(px * px + py * py)
+    # Drop exact-zero padding rows already present in the source.
+    real = pT > 0.0
+    cons = constituents[real]
+    pT = pT[real]
+    order = np.argsort(-pT)[:k]
+    sel = cons[order]
+    out = np.zeros((k, 4), dtype=np.float32)
+    out[: len(sel)] = sel.astype(np.float32)
+    return out
+
+
+def load_top_tagging_constituents(
+    cache_dir: pathlib.Path | str,
+    max_samples: int | None = 100_000,
+    n_constituents: int = 32,
+    seed: int = 0,
+    standardise: bool = True,
+) -> DatasetSplit:
+    """Load Top Tagging as per-constituent 4-momenta for a Deep Sets model.
+
+    Unlike ``load_top_tagging`` (which sums constituents into a single
+    jet-level 6-vector and thereby hands every model the jet mass), this
+    keeps the leading ``n_constituents`` particles per jet so a
+    per-particle architecture can learn from the substructure.
+
+    Each jet is packed as a (n_constituents, 5) tensor:
+        [..., :4] = standardised (E, px, py, pz)
+        [...,  4] = mask (1.0 for a real constituent, 0.0 for padding)
+
+    The trailing mask channel lets the existing ``train_classifier`` /
+    ``run_tabular_experiment`` index batches as ordinary 3-D tensors
+    while the Deep Sets model recovers the mask for correct pooling.
+    Standardisation uses train-split statistics over *real* constituents
+    only; padding rows are forced back to exact zero afterwards.
+    """
+    cache = pathlib.Path(cache_dir)
+    Xs, ys = [], []
+    for cs, label in _iter_top_tagging_jets(cache, max_samples):
+        Xs.append(select_leading_constituents(cs, n_constituents))
+        ys.append(label)
+
+    X = torch.from_numpy(np.stack(Xs))           # (n, K, 4)
+    y = torch.tensor(ys, dtype=torch.long)
+    mask = (X.abs().sum(dim=-1) > 0).to(X.dtype)  # (n, K), 1 real / 0 pad
+
+    Xtr, ytr, Xva, yva, Xte, yte = _split_train_val_test(X, y, seed=seed)
+    mtr, _, mva, _, mte, _ = _split_train_val_test(mask, y, seed=seed)
+
+    if standardise:
+        # Per-component z-score from train real constituents only.
+        real_tr = Xtr[mtr.bool()]                 # (n_real, 4)
+        mean = real_tr.mean(dim=0, keepdim=True)
+        std  = real_tr.std(dim=0, keepdim=True).clamp_min(1e-8)
+        Xtr = (Xtr - mean) / std
+        Xva = (Xva - mean) / std
+        Xte = (Xte - mean) / std
+
+    def _pack(Xc: torch.Tensor, m: torch.Tensor) -> torch.Tensor:
+        Xc = Xc * m.unsqueeze(-1)                  # re-zero padding post-standardise
+        return torch.cat([Xc, m.unsqueeze(-1)], dim=-1)   # (n, K, 5)
+
+    return DatasetSplit(
+        X_train=_pack(Xtr, mtr), y_train=ytr,
+        X_val=_pack(Xva, mva),   y_val=yva,
+        X_test=_pack(Xte, mte),  y_test=yte,
+        name=f"top_tagging_constituents(k={n_constituents})",
+        n_features=4,
         n_classes=2,
     )
 
