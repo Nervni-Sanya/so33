@@ -43,8 +43,12 @@ NATURAL_MODELS = (
     "relu_mlp",
     "tanh_mlp",
     "gelu_mlp",
+    "so33_multi",          # multi-channel SO33: capacity comparison vs wide MLPs
 )
 ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS
+
+# Default number of parallel SO(3,3) blocks for the "so33_multi" variant.
+SO33_MULTI_CHANNELS = 4
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -110,12 +114,26 @@ class DeepSetsClassifier(nn.Module):
         in_features:  int = 4,
         hidden:       int = DIM,
         dtype:        torch.dtype = torch.float64,
+        channels:     list[nn.Module] | None = None,
+        pool:         str = "mean",
     ) -> None:
         super().__init__()
         self.dtype = dtype
-        self.embed = nn.Linear(in_features, hidden).to(dtype)
-        self.activation = activation
-        self.head = nn.Linear(hidden, out_features).to(dtype)
+        self.pool = pool
+        # Single-channel (default) uses ``activation``; multi-channel passes a
+        # list of parallel activations, each with its own embedding, whose
+        # pooled outputs are concatenated before the head.
+        if channels is None:
+            self.embeds = nn.ModuleList([nn.Linear(in_features, hidden).to(dtype)])
+            self.acts   = nn.ModuleList([activation])
+            head_in = hidden
+        else:
+            self.embeds = nn.ModuleList(
+                [nn.Linear(in_features, hidden).to(dtype) for _ in channels]
+            )
+            self.acts = nn.ModuleList(channels)
+            head_in = hidden * len(channels)
+        self.head = nn.Linear(head_in, out_features).to(dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.to(self.dtype)
@@ -123,17 +141,77 @@ class DeepSetsClassifier(nn.Module):
         mask = x[..., 4:5]                       # (B, K, 1)
         B, K, _ = feat.shape
 
-        h = self.embed(feat)                     # (B, K, hidden)
-        h = self.activation(h.reshape(B * K, -1)).reshape(B, K, -1)
-        h = h * mask                             # zero out padding
-        pooled = h.sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)   # masked mean
-        return self.head(pooled)
+        pooled_channels = []
+        for embed, act in zip(self.embeds, self.acts):
+            h = embed(feat)                                   # (B, K, hidden)
+            h = act(h.reshape(B * K, -1)).reshape(B, K, -1)
+            h = h * mask                                      # zero out padding
+            if self.pool == "sum":
+                pooled = h.sum(dim=1)
+            else:                                             # masked mean
+                pooled = h.sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
+            pooled_channels.append(pooled)
+        return self.head(torch.cat(pooled_channels, dim=-1))
 
     def regularization_loss(self) -> torch.Tensor:
-        reg = getattr(self.activation, "regularization_loss", None)
-        if callable(reg):
-            return reg()
-        return torch.zeros((), dtype=self.dtype)
+        total = torch.zeros((), dtype=self.dtype)
+        for act in self.acts:
+            reg = getattr(act, "regularization_loss", None)
+            if callable(reg):
+                total = total + reg()
+        return total
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Multi-channel SO33 (capacity comparison)
+# ─────────────────────────────────────────────────────────────────────────
+
+class MultiChannelSO33(nn.Module):
+    """C parallel SO(3,3) blocks, concatenated, then a linear head.
+
+    A single SO33 block is locked to 6 hidden dims by the algebra, which
+    caps its capacity well below a wide MLP. This runs C independent
+    Linear(in->6) -> SO33Activation blocks in parallel and concatenates
+    their 6-D outputs (C*6 features) before the classifier. Each block
+    keeps the full geometric prior; together they provide the width that
+    lets SO33 compete with natural-width MLPs on raw accuracy.
+
+    Works on flat inputs (B, in_features). For per-constituent data use
+    ``DeepSetsClassifier`` with ``channels > 1``.
+    """
+
+    def __init__(
+        self,
+        in_features:  int,
+        out_features: int,
+        *,
+        channels: int = SO33_MULTI_CHANNELS,
+        T: float = 0.3,
+        adjoint: bool = True,
+        dtype: torch.dtype = torch.float64,
+        bound_input: bool = False,
+        so33_kwargs: dict | None = None,
+    ) -> None:
+        super().__init__()
+        self.dtype = dtype
+        so33_kwargs = so33_kwargs or {}
+        self.embeds = nn.ModuleList(
+            [nn.Linear(in_features, DIM).to(dtype) for _ in range(channels)]
+        )
+        self.acts = nn.ModuleList([
+            SO33Activation(T=T, adjoint=adjoint, dtype=dtype,
+                           bound_input=bound_input, **so33_kwargs)
+            for _ in range(channels)
+        ])
+        self.head = nn.Linear(DIM * channels, out_features).to(dtype)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(self.dtype)
+        h = torch.cat([a(e(x)) for e, a in zip(self.embeds, self.acts)], dim=-1)
+        return self.head(h)
+
+    def regularization_loss(self) -> torch.Tensor:
+        return sum(a.regularization_loss() for a in self.acts)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -150,18 +228,32 @@ def _build_deepsets(
     dtype: torch.dtype,
     natural_hidden: int,
     so33_kwargs: dict,
+    bound_input: bool,
+    pool: str,
 ) -> nn.Module:
     """Construct the per-constituent Deep Sets variant for a model name."""
-    if name in ("so33", "so33_signature_only", "so33_frozen"):
-        act = SO33Activation(
+    def make_so33(**extra):
+        return SO33Activation(
             T=T, adjoint=adjoint, dtype=dtype,
+            bound_input=bound_input, **extra, **so33_kwargs,
+        )
+
+    if name in ("so33", "so33_signature_only", "so33_frozen"):
+        act = make_so33(
             signature_only=(name == "so33_signature_only"),
             freeze_coeffs=(name == "so33_frozen"),
-            **so33_kwargs,
         )
         return DeepSetsClassifier(
             activation=act, out_features=out_features,
+            in_features=in_features, hidden=DIM, dtype=dtype, pool=pool,
+        )
+
+    if name == "so33_multi":
+        chans = [make_so33() for _ in range(SO33_MULTI_CHANNELS)]
+        return DeepSetsClassifier(
+            activation=None, out_features=out_features,
             in_features=in_features, hidden=DIM, dtype=dtype,
+            channels=chans, pool=pool,
         )
 
     pointwise: dict[str, Callable[[], nn.Module]] = {
@@ -173,7 +265,7 @@ def _build_deepsets(
         hidden = DIM if name.endswith("_bottleneck") else natural_hidden
         return DeepSetsClassifier(
             activation=pointwise[name](), out_features=out_features,
-            in_features=in_features, hidden=hidden, dtype=dtype,
+            in_features=in_features, hidden=hidden, dtype=dtype, pool=pool,
         )
 
     raise ValueError(f"Unknown model name: {name!r}. Known: {ALL_MODELS}")
@@ -191,6 +283,8 @@ def build_model(
     so33_method: str = "rk4",
     so33_step_size: float | None = None,
     representation: str = "flat",
+    bound_input: bool | None = None,
+    pool: str = "mean",
 ) -> nn.Module:
     """Construct a model by string name.
 
@@ -229,29 +323,44 @@ def build_model(
         if so33_step_size is not None:
             so33_kwargs["solver_options"] = {"step_size": so33_step_size}
 
+    # bound_input is representation-aware: on per-constituent 4-momenta the
+    # geodesic diverges (boosts -> large ||v|| -> NaN) so it must be on;
+    # on flat already-standardised features (HIGGS/Adult) it squashes signal
+    # and hurts, so it stays off. Callers may override explicitly.
+    if bound_input is None:
+        bound_input = (representation == "constituents")
+
     if representation == "constituents":
         return _build_deepsets(
             name, in_features, out_features,
             T=T, adjoint=adjoint, dtype=dtype,
             natural_hidden=natural_hidden, so33_kwargs=so33_kwargs,
+            bound_input=bound_input, pool=pool,
         )
 
     if name == "so33":
         return SO33Network(
             in_features=in_features, out_features=out_features,
-            T=T, adjoint=adjoint, dtype=dtype, **so33_kwargs,
+            T=T, adjoint=adjoint, dtype=dtype, bound_input=bound_input,
+            **so33_kwargs,
         )
     if name == "so33_signature_only":
         return SO33Network(
             in_features=in_features, out_features=out_features,
             T=T, adjoint=adjoint, dtype=dtype, signature_only=True,
-            **so33_kwargs,
+            bound_input=bound_input, **so33_kwargs,
         )
     if name == "so33_frozen":
         return SO33Network(
             in_features=in_features, out_features=out_features,
             T=T, adjoint=adjoint, dtype=dtype, freeze_coeffs=True,
-            **so33_kwargs,
+            bound_input=bound_input, **so33_kwargs,
+        )
+    if name == "so33_multi":
+        return MultiChannelSO33(
+            in_features=in_features, out_features=out_features,
+            channels=SO33_MULTI_CHANNELS, T=T, adjoint=adjoint, dtype=dtype,
+            bound_input=bound_input, so33_kwargs=so33_kwargs,
         )
 
     pointwise: dict[str, Callable[[], nn.Module]] = {

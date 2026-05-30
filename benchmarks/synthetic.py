@@ -107,6 +107,90 @@ def generate_causal_dataset(
     return X, y
 
 
+def _boost_matrix(rapidity: torch.Tensor, space_axis: int = 0,
+                  time_axis: int = 3, dtype: torch.dtype = torch.float64):
+    """Batch of SO(3,3) boost matrices mixing one +axis and one -axis.
+
+    For metric diag(+,+,+,-,-,-), a 'boost' between a spacelike axis i and
+    a timelike axis j is the hyperbolic rotation
+        [[cosh φ, sinh φ], [sinh φ, cosh φ]]
+    embedded in the 6x6 identity. These are genuine SO(3,3) group elements
+    (they preserve eta), so applying them is an exact symmetry of the model
+    family — the property the OOD experiment probes.
+
+    Parameters
+    ----------
+    rapidity : (B,) tensor of φ values.
+
+    Returns
+    -------
+    (B, 6, 6) tensor of boost matrices.
+    """
+    B = rapidity.shape[0]
+    M = torch.eye(DIM, dtype=dtype).unsqueeze(0).repeat(B, 1, 1)
+    ch, sh = torch.cosh(rapidity), torch.sinh(rapidity)
+    M[:, space_axis, space_axis] = ch
+    M[:, time_axis,  time_axis]  = ch
+    M[:, space_axis, time_axis]  = sh
+    M[:, time_axis,  space_axis] = sh
+    return M
+
+
+def generate_boost_invariant_dataset(
+    n_samples: int = 10_000,
+    seed: int = 7,
+    rapidity_range: Tuple[float, float] = (0.0, 0.8),
+    mass_lo: float = 1.0,
+    mass_hi: float = 3.0,
+    p_spread: float = 0.5,
+    dtype: torch.dtype = torch.float64,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """4-vectors labelled by a Lorentz invariant, scrambled by random boosts.
+
+    Each sample is a particle 4-vector embedded in R^{3,3} as
+    (px, py, pz, E, 0, 0): spatial momentum on the +axes 0..2, energy on
+    the -axis 3 (matching the metric used elsewhere). The class label is
+    the invariant mass band (low vs high), which is **boost-invariant** —
+    but every sample is hit with a random SO(3,3) boost of rapidity drawn
+    from ``rapidity_range``, so the raw components of the two classes
+    overlap heavily. Only a model that can recover the invariant separates
+    them cleanly, and a Lorentz-equivariant model should generalise across
+    rapidity regimes it never saw in training (the OOD claim).
+
+    Returns
+    -------
+    X        : (n_samples, 6) float tensor.
+    y        : (n_samples,) long tensor (0 = low mass, 1 = high mass).
+    rapidity : (n_samples,) float tensor of the applied boost rapidities.
+    """
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    # Class by invariant mass.
+    y = (torch.rand(n_samples) > 0.5).long()
+    m = torch.where(y.bool(), torch.tensor(mass_hi), torch.tensor(mass_lo)).to(dtype)
+
+    # Rest-frame-ish 4-vector: random 3-momentum, energy from mass shell.
+    p = torch.randn(n_samples, 3, dtype=dtype) * p_spread
+    E = torch.sqrt(m * m + p.pow(2).sum(-1))
+    v6 = torch.zeros(n_samples, DIM, dtype=dtype)
+    v6[:, 0:3] = p
+    v6[:, 3]   = E
+
+    # Random boost rapidity in range, random spatial axis to boost along.
+    lo, hi = rapidity_range
+    rapidity = torch.rand(n_samples, dtype=dtype) * (hi - lo) + lo
+    axis = torch.randint(0, 3, (n_samples,))
+    X = v6.clone()
+    for a in range(3):
+        sel = axis == a
+        if sel.any():
+            Mb = _boost_matrix(rapidity[sel], space_axis=a, time_axis=3, dtype=dtype)
+            X[sel] = torch.einsum("bij,bj->bi", Mb, v6[sel])
+
+    return X, y, rapidity
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # SO(3,3) group elements (for equivariance tests and data augmentation)
 # ─────────────────────────────────────────────────────────────────────────

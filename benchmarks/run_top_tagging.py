@@ -53,6 +53,13 @@ def main(argv: list[str] | None = None) -> int:
                         "where the geometric prior can use substructure).")
     p.add_argument("--n-constituents", type=int, default=32,
                    help="Leading constituents per jet (constituents mode only).")
+    p.add_argument("--normalize", choices=["global", "per_component", "none"],
+                   default="global",
+                   help="Constituent normalisation. 'global' (default) preserves "
+                        "the Lorentz invariant E^2-p^2 (best for SO33); "
+                        "'per_component' z-scores each component (destroys it).")
+    p.add_argument("--pool", choices=["mean", "sum"], default="mean",
+                   help="Deep Sets pooling over constituents.")
     args = p.parse_args(argv)
 
     if args.quick:
@@ -66,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         split = load_top_tagging_constituents(
             cache_dir=args.cache_dir, max_samples=args.max_samples,
             n_constituents=args.n_constituents, seed=args.seed, standardise=True,
+            normalize=args.normalize,
         )
         epochs = args.epochs
         experiment = "top_tagging_constituents"
@@ -89,6 +97,7 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed,
         epochs=epochs,
         representation=rep,
+        pool=args.pool,
         results_dir=args.results_dir,
     )
     if models is not None:

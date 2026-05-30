@@ -364,6 +364,7 @@ def load_top_tagging_constituents(
     n_constituents: int = 32,
     seed: int = 0,
     standardise: bool = True,
+    normalize: str = "global",
 ) -> DatasetSplit:
     """Load Top Tagging as per-constituent 4-momenta for a Deep Sets model.
 
@@ -373,14 +374,26 @@ def load_top_tagging_constituents(
     per-particle architecture can learn from the substructure.
 
     Each jet is packed as a (n_constituents, 5) tensor:
-        [..., :4] = standardised (E, px, py, pz)
+        [..., :4] = normalised (E, px, py, pz)
         [...,  4] = mask (1.0 for a real constituent, 0.0 for padding)
 
     The trailing mask channel lets the existing ``train_classifier`` /
     ``run_tabular_experiment`` index batches as ordinary 3-D tensors
     while the Deep Sets model recovers the mask for correct pooling.
-    Standardisation uses train-split statistics over *real* constituents
-    only; padding rows are forced back to exact zero afterwards.
+
+    ``normalize`` controls the input scaling, which matters a great deal
+    for SO33: the (3,3) signature only carries meaning if the Lorentz
+    invariant m^2 = E^2 - px^2 - py^2 - pz^2 survives normalisation.
+      - "global"        : divide all components by one scalar (the train
+                          RMS over real constituents). Preserves the metric
+                          structure; recommended for SO33. (default)
+      - "per_component" : independent z-score per (E,px,py,pz). Destroys
+                          the invariant — fine for generic baselines, bad
+                          for the geometric prior. Kept for ablation.
+      - "none"          : raw 4-momenta (large dynamic range; only use with
+                          bound_input on the model side).
+    Statistics use train-split *real* constituents only; padding rows are
+    forced back to exact zero afterwards.
     """
     cache = pathlib.Path(cache_dir)
     Xs, ys = [], []
@@ -395,14 +408,23 @@ def load_top_tagging_constituents(
     Xtr, ytr, Xva, yva, Xte, yte = _split_train_val_test(X, y, seed=seed)
     mtr, _, mva, _, mte, _ = _split_train_val_test(mask, y, seed=seed)
 
-    if standardise:
-        # Per-component z-score from train real constituents only.
+    if standardise and normalize != "none":
         real_tr = Xtr[mtr.bool()]                 # (n_real, 4)
-        mean = real_tr.mean(dim=0, keepdim=True)
-        std  = real_tr.std(dim=0, keepdim=True).clamp_min(1e-8)
-        Xtr = (Xtr - mean) / std
-        Xva = (Xva - mean) / std
-        Xte = (Xte - mean) / std
+        if normalize == "per_component":
+            mean = real_tr.mean(dim=0, keepdim=True)
+            std  = real_tr.std(dim=0, keepdim=True).clamp_min(1e-8)
+            Xtr = (Xtr - mean) / std
+            Xva = (Xva - mean) / std
+            Xte = (Xte - mean) / std
+        elif normalize == "global":
+            # One scalar scale = RMS magnitude over all components. Keeps the
+            # ratio E:px:py:pz (hence E^2 - p^2) intact up to a global factor.
+            scale = real_tr.pow(2).mean().sqrt().clamp_min(1e-8)
+            Xtr = Xtr / scale
+            Xva = Xva / scale
+            Xte = Xte / scale
+        else:
+            raise ValueError(f"unknown normalize mode: {normalize!r}")
 
     def _pack(Xc: torch.Tensor, m: torch.Tensor) -> torch.Tensor:
         Xc = Xc * m.unsqueeze(-1)                  # re-zero padding post-standardise
@@ -412,7 +434,7 @@ def load_top_tagging_constituents(
         X_train=_pack(Xtr, mtr), y_train=ytr,
         X_val=_pack(Xva, mva),   y_val=yva,
         X_test=_pack(Xte, mte),  y_test=yte,
-        name=f"top_tagging_constituents(k={n_constituents})",
+        name=f"top_tagging_constituents(k={n_constituents},norm={normalize})",
         n_features=4,
         n_classes=2,
     )
