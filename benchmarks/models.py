@@ -284,6 +284,7 @@ def build_model(
     so33_step_size: float | None = None,
     representation: str = "flat",
     bound_input: bool | None = None,
+    max_input_norm: float | None = 8.0,
     pool: str = "mean",
 ) -> nn.Module:
     """Construct a model by string name.
@@ -337,6 +338,15 @@ def build_model(
             natural_hidden=natural_hidden, so33_kwargs=so33_kwargs,
             bound_input=bound_input, pool=pool,
         )
+
+    # Flat real-data path: when bound_input is off (which it is by default,
+    # to avoid squashing standardised features), add a soft norm cap as a
+    # safety net. Real HIGGS has heavy-tailed features that occasionally
+    # drive the geodesic to a stochastic NaN (so33 -> 0.473 in one run,
+    # 0.752 in another). The cap only rescales outliers, so it does not
+    # hurt the typical-input signal the way bound_input does.
+    if not bound_input and max_input_norm is not None:
+        so33_kwargs = dict(so33_kwargs, max_input_norm=max_input_norm)
 
     if name == "so33":
         return SO33Network(

@@ -57,6 +57,7 @@ class SO33Network(nn.Module):
         signature_only: bool = False,
         freeze_coeffs:  bool = False,
         bound_input:    bool = False,
+        max_input_norm: float | None = None,
         method:         str  = "dopri5",
         solver_options: dict | None = None,
     ) -> None:
@@ -70,6 +71,7 @@ class SO33Network(nn.Module):
             signature_only=signature_only,
             freeze_coeffs=freeze_coeffs,
             bound_input=bound_input,
+            max_input_norm=max_input_norm,
             solver_options=solver_options,
         )
         self.output_proj = nn.Linear(DIM, out_features).to(dtype)

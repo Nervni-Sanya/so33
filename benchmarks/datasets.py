@@ -447,31 +447,47 @@ def load_top_tagging_constituents(
 def load_neutral_tabular(seed: int = 0, standardise: bool = True) -> DatasetSplit:
     """Tabular dataset with no Lorentz structure (used as a sanity check).
 
-    Tries sklearn.datasets.fetch_openml('adult') first; falls back to
-    the built-in load_breast_cancer (569 samples) if no network access.
+    Loads UCI Adult via ``fetch_openml('adult', version=2, as_frame=True)``
+    and preprocesses properly: numeric columns are kept as-is, the 8
+    categorical columns are one-hot encoded, and the target is decoded
+    robustly across the bytes/str/int encodings OpenML may return. Falls
+    back to the built-in load_breast_cancer (569 samples) if there is no
+    network access.
+
+    NOTE: the previous version used ``as_frame=False`` and
+    ``np.asarray(data, dtype=float32)``, which silently turned Adult's
+    categorical string columns into NaN. NaN features propagate through
+    standardisation and every model collapses to the majority class
+    (0.76) — the bug that made all 9 baselines tie. One-hot encoding the
+    categoricals fixes it.
     """
     from sklearn import datasets as skd
 
     name = "neutral_adult"
     try:
-        bunch = skd.fetch_openml("adult", version=2, as_frame=False, parser="liac-arff")
-        X_np = np.asarray(bunch.data, dtype=np.float32)
-        # OpenML's liac-arff parser returns the target as bytes
-        # (b'<=50K' / b'>50K') or integer category codes (0/1) — never as
-        # str — so a naive `target == ">50K"` collapses to all-False and
-        # turns Adult into a degenerate one-class problem. Decode + strip
-        # to normalise across encodings, including the trailing '.' that
-        # the original UCI ARFF distribution embeds (">50K." vs ">50K").
-        target = np.asarray(bunch.target)
-        if np.issubdtype(target.dtype, np.integer):
-            y_np = target.astype(np.int64)
+        bunch = skd.fetch_openml("adult", version=2, as_frame=True)
+        df = bunch.frame.copy()
+
+        # Robust target decode (bytes / str / int; strip trailing '.').
+        target = df[bunch.target_names[0]] if hasattr(bunch, "target_names") \
+            else df.iloc[:, -1]
+        df = df.drop(columns=[target.name])
+
+        import pandas as pd
+        if pd.api.types.is_integer_dtype(target):
+            y_np = target.to_numpy(dtype=np.int64)
         else:
-            target_str = np.array([
-                (t.decode() if isinstance(t, (bytes, bytearray)) else str(t))
-                .strip().rstrip('.')
-                for t in target
-            ])
-            y_np = (target_str == ">50K").astype(np.int64)
+            tstr = target.astype(str).str.strip().str.rstrip(".")
+            y_np = (tstr == ">50K").to_numpy().astype(np.int64)
+
+        # One-hot encode categoricals; keep numerics. Drop rows with NaN
+        # (Adult uses '?' which pandas reads as a category, so this mostly
+        # affects genuinely missing numerics).
+        X_df = pd.get_dummies(df, dummy_na=False)
+        X_df = X_df.astype(np.float32)
+        keep = ~np.isnan(X_df.to_numpy()).any(axis=1)
+        X_np = X_df.to_numpy()[keep]
+        y_np = y_np[keep]
     except Exception:
         bunch = skd.load_breast_cancer()
         X_np = bunch.data.astype(np.float32)

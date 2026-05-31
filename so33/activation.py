@@ -113,6 +113,7 @@ class SO33Activation(nn.Module):
         signature_only: bool = False,
         freeze_coeffs: bool = False,
         bound_input: bool = False,
+        max_input_norm: float | None = None,
         solver_options: dict | None = None,
     ) -> None:
         super().__init__()
@@ -126,6 +127,7 @@ class SO33Activation(nn.Module):
         self.dtype          = dtype
         self.signature_only = signature_only
         self.bound_input    = bound_input
+        self.max_input_norm = max_input_norm
         self.solver_options = dict(solver_options) if solver_options else None
 
         # ── Fixed basis (non-trainable, moves with .to(device)) ───────────────
@@ -184,6 +186,15 @@ class SO33Activation(nn.Module):
             # to underflow dt to zero. Differentiable; trains end-to-end.
             x_norm = x.norm(dim=-1, keepdim=True)
             x = x / (1.0 + x_norm)
+        elif self.max_input_norm is not None:
+            # Soft norm cap: leave typical inputs untouched but rescale only
+            # the heavy-tailed outliers whose ||x|| exceeds the cap. This
+            # prevents the rare-large-input geodesic blow-up (stochastic NaN
+            # on real HIGGS) without the signal-squashing of bound_input,
+            # which divides *every* input. Differentiable.
+            x_norm = x.norm(dim=-1, keepdim=True)
+            factor = (self.max_input_norm / x_norm.clamp_min(self.max_input_norm))
+            x = x * factor
 
         scale = self._adaptive_scale()
 
