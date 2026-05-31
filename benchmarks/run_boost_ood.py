@@ -66,8 +66,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--quick", action="store_true",
                    help="Smoke run: 1k samples, 5 epochs.")
     p.add_argument("--models", type=str,
-                   default="so33,so33_multi,so33_signature_only,relu_bottleneck,relu_mlp",
-                   help="Comma-separated model names.")
+                   default=("so33,so33_multi,so33_signature_only,"
+                            "relu_bottleneck,relu_mlp,"
+                            "eta_invariants,so33_equivariant"),
+                   help="Comma-separated model names. The last two are the "
+                        "equivariant architectures evaluated on per-particle "
+                        "K=1 sets — they should give ~perfect OOD.")
     p.add_argument("--n", type=int, default=20_000)
     p.add_argument("--epochs", type=int, default=40)
     p.add_argument("--seed", type=int, default=0)
@@ -109,18 +113,36 @@ def main(argv: list[str] | None = None) -> int:
     names = [n.strip() for n in args.models.split(",") if n.strip()]
     summary = []
 
+    # The two equivariant architectures consume per-particle sets (B, K, 5)
+    # = (E, px, py, pz, mask). Repack the flat (B, 6) lifted-6-vector samples
+    # as K=1 sets (one particle per "jet"): extract (E, px, py, pz) from the
+    # (px, py, pz, E, 0, 0) lift, add a mask=1 channel.
+    def to_set(X6: torch.Tensor) -> torch.Tensor:
+        p4 = torch.stack([X6[:, 3], X6[:, 0], X6[:, 1], X6[:, 2]], dim=-1)  # E,px,py,pz
+        mask = torch.ones(p4.shape[0], 1, dtype=p4.dtype)
+        return torch.cat([p4.unsqueeze(1), mask.unsqueeze(-1)], dim=-1)     # (B,1,5)
+
+    SET_MODELS = {"eta_invariants", "so33_equivariant"}
+
     for name in names:
-        # SO33 sees large-magnitude boosted inputs -> needs bound_input on.
+        is_set = name in SET_MODELS
+        Xtr_m, Xva_m, Xid_m, Xood_m = (
+            (to_set(Xtr), to_set(Xva), to_set(Xid), to_set(Xood))
+            if is_set else (Xtr, Xva, Xid, Xood)
+        )
+        in_features = 4 if is_set else 6
+        representation = "constituents" if is_set else "flat"
         bound = True if name.startswith("so33") else None
-        model = build_model(name, in_features=6, out_features=2, T=0.3,
-                            bound_input=bound)
+        model = build_model(name, in_features=in_features, out_features=2,
+                            T=0.3, bound_input=bound,
+                            representation=representation)
         cfg = TrainConfig(epochs=args.epochs, batch_size=128, lr=3e-3,
                           seed=args.seed, cosine_schedule=True, grad_clip=1.0)
         print(f"[boost_ood] {name} | train ...")
-        res = train_classifier(model, Xtr, ytr, Xva, yva, cfg)
+        res = train_classifier(model, Xtr_m, ytr, Xva_m, yva, cfg)
 
-        id_auc, id_acc = _auc(model, Xid, yid), _acc(model, Xid, yid)
-        ood_auc, ood_acc = _auc(model, Xood, yood), _acc(model, Xood, yood)
+        id_auc, id_acc = _auc(model, Xid_m, yid), _acc(model, Xid_m, yid)
+        ood_auc, ood_acc = _auc(model, Xood_m, yood), _acc(model, Xood_m, yood)
         record = {
             "experiment": "boost_ood",
             "model": name,

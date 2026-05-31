@@ -27,7 +27,30 @@ import torch
 import torch.nn as nn
 
 from so33 import SO33Activation, SO33Network, BottleneckClassifier
-from so33.basis import DIM
+from so33.basis import DIM, ETA
+
+
+def _lift_4to6(p4: torch.Tensor) -> torch.Tensor:
+    """Equivariant lift of a (..., 4) Minkowski 4-vector into R^{3,3}.
+
+    Layout matches ETA = diag(+1,+1,+1,-1,-1,-1):
+        out[..., 0:3] = (px, py, pz)        spacelike (+)
+        out[...,   3] = E                    timelike  (-)
+        out[..., 4:6] = 0                    unused timelike axes
+
+    This is deterministic (no learned parameters), so SO(3,3) boosts
+    acting on the lifted vector correspond exactly to the standard
+    Lorentz action on the original (E, p). A learned Linear(4->6) would
+    not commute with SO(3,3) and is why the previous OOD experiment
+    showed no advantage for SO33-based models.
+    """
+    shape = p4.shape[:-1] + (DIM,)
+    out = p4.new_zeros(shape)
+    out[..., 0] = p4[..., 1]
+    out[..., 1] = p4[..., 2]
+    out[..., 2] = p4[..., 3]
+    out[..., 3] = p4[..., 0]
+    return out
 
 
 # Names the factory understands.
@@ -44,6 +67,8 @@ NATURAL_MODELS = (
     "tanh_mlp",
     "gelu_mlp",
     "so33_multi",          # multi-channel SO33: capacity comparison vs wide MLPs
+    "eta_invariants",      # SO(3,3)-invariant features (Arch A)
+    "so33_equivariant",    # equivariant lift + SO33 + invariant readout (Arch B)
 )
 ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS
 
@@ -215,6 +240,155 @@ class MultiChannelSO33(nn.Module):
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Equivariant architectures (the OOD-headline experiments)
+# ─────────────────────────────────────────────────────────────────────────
+
+class EtaInvariantsClassifier(nn.Module):
+    """SO(3,3)-INVARIANT-by-construction classifier (Arch A).
+
+    Per-particle features are reduced to the only quantities that survive
+    an SO(3,3) transformation: the η-norm  m_i² = <p_i, η p_i>  of each
+    constituent and the pairwise η-inner products  s_ij = <p_i, η p_j>.
+    Those scalars are pooled into permutation-invariant statistics and
+    fed to a plain MLP. The whole network commutes with any SO(3,3) boost
+    BY CONSTRUCTION (no approximation), so the model is structurally
+    immune to the boost-OOD failure mode that hits Linear-wrapped designs.
+
+    No SO33Activation here on purpose: this is the maximally-conservative
+    "use only the η metric, nothing else" baseline. If even this loses on
+    OOD, the inductive bias hypothesis is wrong; if it wins, we have a
+    clean demonstration of where the prior helps.
+    """
+
+    def __init__(
+        self,
+        out_features: int,
+        hidden: int = 64,
+        dtype: torch.dtype = torch.float64,
+    ) -> None:
+        super().__init__()
+        self.dtype = dtype
+        self.register_buffer("eta", ETA.to(dtype))
+
+        # 7 pooled invariant statistics (see forward) -> small MLP -> logits.
+        self.mlp = nn.Sequential(
+            nn.Linear(7, hidden), nn.ReLU(),
+            nn.Linear(hidden, hidden), nn.ReLU(),
+            nn.Linear(hidden, out_features),
+        ).to(dtype)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(self.dtype)
+        p4   = x[..., :4]                                  # (B, K, 4)
+        mask = x[..., 4]                                    # (B, K)
+        p    = _lift_4to6(p4)                               # (B, K, 6)
+
+        eta = self.eta                                      # (6,)
+        # Per-particle η-norm  m_i^2 = <p_i, η p_i>
+        m2 = (p * eta * p).sum(dim=-1)                      # (B, K)
+        m2 = m2 * mask
+        # Pairwise η-inner products  s_ij = <p_i, η p_j>
+        s  = torch.einsum("bki,i,bli->bkl", p, eta, p)      # (B, K, K)
+        pair_mask = mask.unsqueeze(2) * mask.unsqueeze(1)   # (B, K, K)
+        s = s * pair_mask
+        eye = torch.eye(s.shape[-1], dtype=s.dtype, device=s.device)
+        s_off = s * (1.0 - eye)                             # off-diagonal pairs
+
+        n_real      = mask.sum(dim=-1).clamp_min(1.0)
+        n_real_pair = pair_mask.sum(dim=(-2, -1)).clamp_min(1.0)
+
+        feats = torch.stack([
+            m2.sum(dim=-1) / n_real,                        # mean per-particle mass²
+            m2.pow(2).sum(dim=-1) / n_real,                 # mean (mass²)²
+            m2.abs().sum(dim=-1) / n_real,                  # mean |mass²|
+            s_off.sum(dim=(-2, -1)) / n_real_pair,          # mean pairwise inner
+            s_off.pow(2).sum(dim=(-2, -1)) / n_real_pair,   # mean squared pairwise
+            s_off.abs().max(dim=-1).values.max(dim=-1).values,    # max |pair|
+            (p.sum(dim=1) * eta * p.sum(dim=1)).sum(dim=-1),       # jet-total <P,ηP>
+        ], dim=-1)                                          # (B, 7)
+        return self.mlp(feats)
+
+    def regularization_loss(self) -> torch.Tensor:
+        return torch.zeros((), dtype=self.dtype)
+
+
+class EquivariantSO33Classifier(nn.Module):
+    """Equivariant lift + per-particle SO33Activation + INVARIANT readout (Arch B).
+
+    Unlike DeepSetsClassifier (whose Linear(4->6) breaks SO(3,3) equivariance),
+    this:
+      1. lifts each 4-momentum to R^{3,3} by deterministic placement
+         (``_lift_4to6``), which IS equivariant;
+      2. applies the SO33Activation per particle (empirically equivariant to
+         <0.13% relative error at init, ~3.4% after heavy training);
+      3. reads out only SO(3,3)-INVARIANT scalars built from the activated
+         outputs: per-particle η-norm and pairwise η-inner products with the
+         jet-total vector, pooled per channel;
+      4. classifies the pooled invariants with a small MLP.
+
+    Multi-channel: each of ``channels`` SO33Activations sees the same
+    lifted input but learns its own connection, contributing independent
+    invariant features for the readout. This is the "test the ODE kernel
+    inside a structurally equivariant frame" architecture.
+    """
+
+    def __init__(
+        self,
+        out_features: int,
+        *,
+        channels: int = SO33_MULTI_CHANNELS,
+        T: float = 0.3,
+        adjoint: bool = True,
+        dtype: torch.dtype = torch.float64,
+        bound_input: bool = True,
+        head_hidden: int = 32,
+        so33_kwargs: dict | None = None,
+    ) -> None:
+        super().__init__()
+        self.dtype = dtype
+        self.register_buffer("eta", ETA.to(dtype))
+        so33_kwargs = so33_kwargs or {}
+        self.acts = nn.ModuleList([
+            SO33Activation(T=T, adjoint=adjoint, dtype=dtype,
+                           bound_input=bound_input, **so33_kwargs)
+            for _ in range(channels)
+        ])
+        # 3 invariants per channel: mean m^2, mean |m|, <jet-total, η jet-total>
+        n_feats = 3 * channels
+        self.head = nn.Sequential(
+            nn.Linear(n_feats, head_hidden), nn.ReLU(),
+            nn.Linear(head_hidden, out_features),
+        ).to(dtype)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(self.dtype)
+        p4   = x[..., :4]
+        mask = x[..., 4]
+        p    = _lift_4to6(p4)                               # (B, K, 6) equivariant
+
+        B, K, _ = p.shape
+        eta = self.eta
+        n_real = mask.sum(dim=-1).clamp_min(1.0)
+
+        feats = []
+        for act in self.acts:
+            h = act(p.reshape(B * K, DIM)).reshape(B, K, DIM)
+            h = h * mask.unsqueeze(-1)                      # zero out padding
+            m2 = (h * eta * h).sum(dim=-1)                  # (B, K) — INVARIANT
+            jet_total = h.sum(dim=1)                        # (B, 6)
+            jet_inv = (jet_total * eta * jet_total).sum(-1)  # (B,) — INVARIANT
+            feats.extend([
+                m2.sum(dim=-1) / n_real,
+                m2.abs().sum(dim=-1) / n_real,
+                jet_inv,
+            ])
+        return self.head(torch.stack(feats, dim=-1))
+
+    def regularization_loss(self) -> torch.Tensor:
+        return sum(a.regularization_loss() for a in self.acts)
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Factory
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -254,6 +428,15 @@ def _build_deepsets(
             activation=None, out_features=out_features,
             in_features=in_features, hidden=DIM, dtype=dtype,
             channels=chans, pool=pool,
+        )
+
+    if name == "eta_invariants":
+        return EtaInvariantsClassifier(out_features=out_features, dtype=dtype)
+
+    if name == "so33_equivariant":
+        return EquivariantSO33Classifier(
+            out_features=out_features, T=T, adjoint=adjoint, dtype=dtype,
+            bound_input=bound_input, so33_kwargs=so33_kwargs,
         )
 
     pointwise: dict[str, Callable[[], nn.Module]] = {
