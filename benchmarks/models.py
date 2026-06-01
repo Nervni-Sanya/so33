@@ -67,10 +67,13 @@ NATURAL_MODELS = (
     "tanh_mlp",
     "gelu_mlp",
     "so33_multi",          # multi-channel SO33: capacity comparison vs wide MLPs
+)
+SET_MODELS = (
+    # Set-based equivariant classifiers — only valid for representation="constituents".
     "eta_invariants",      # SO(3,3)-invariant features (Arch A)
     "so33_equivariant",    # equivariant lift + SO33 + invariant readout (Arch B)
 )
-ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS
+ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS + SET_MODELS
 
 # Default number of parallel SO(3,3) blocks for the "so33_multi" variant.
 SO33_MULTI_CHANNELS = 4

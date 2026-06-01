@@ -29,7 +29,7 @@ import torch
 import torch.nn as nn
 
 from .datasets import DatasetSplit
-from .models import build_model, MATCHED_MODELS, NATURAL_MODELS
+from .models import build_model, MATCHED_MODELS, NATURAL_MODELS, SET_MODELS
 from .train import train_classifier, TrainConfig
 
 
@@ -61,7 +61,7 @@ def run_tabular_experiment(
     experiment: str,
     split: DatasetSplit,
     *,
-    models: Iterable[str] = MATCHED_MODELS + NATURAL_MODELS,
+    models: Iterable[str] | None = None,
     seed: int = 0,
     epochs: int = 30,
     batch_size: int = 128,
@@ -84,9 +84,25 @@ def run_tabular_experiment(
 
     print(f"[{experiment}] {split.summary()}")
 
+    if models is None:
+        # SET_MODELS need per-particle (B, K, 5) input — only valid for the
+        # constituents path. Skip them for flat tabular experiments
+        # (HIGGS, Adult, top_tagging aggregated).
+        models = MATCHED_MODELS + NATURAL_MODELS
+        if representation == "constituents":
+            models = models + SET_MODELS
+
     summary: list[dict] = []
     for name in models:
-        family = "natural_width" if name in NATURAL_MODELS else "matched_bottleneck"
+        if name in SET_MODELS and representation != "constituents":
+            print(f"[{experiment}] SKIP {name}: requires representation=constituents")
+            continue
+        if name in SET_MODELS:
+            family = "equivariant_set"
+        elif name in NATURAL_MODELS:
+            family = "natural_width"
+        else:
+            family = "matched_bottleneck"
         print(f"[{experiment}] {name} ({family}) | train ...")
 
         model = build_model(

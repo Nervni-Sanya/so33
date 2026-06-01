@@ -122,10 +122,11 @@ def main(argv: list[str] | None = None) -> int:
         mask = torch.ones(p4.shape[0], 1, dtype=p4.dtype)
         return torch.cat([p4.unsqueeze(1), mask.unsqueeze(-1)], dim=-1)     # (B,1,5)
 
-    SET_MODELS = {"eta_invariants", "so33_equivariant"}
+    from benchmarks.models import SET_MODELS as _SET_MODELS
+    set_names = set(_SET_MODELS)
 
     for name in names:
-        is_set = name in SET_MODELS
+        is_set = name in set_names
         Xtr_m, Xva_m, Xid_m, Xood_m = (
             (to_set(Xtr), to_set(Xva), to_set(Xid), to_set(Xood))
             if is_set else (Xtr, Xva, Xid, Xood)
