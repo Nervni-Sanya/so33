@@ -1,0 +1,225 @@
+% Geodesic ODE Activations on so(3,3): A Lorentz-Inspired Inductive Bias
+%
+% Compile with:  pdflatex main && bibtex main && pdflatex main && pdflatex main
+%
+% NOTE: this file uses stock article class so it builds out-of-the-box.
+% Before arXiv submission, switch to NeurIPS 2024 style by replacing the
+% \documentclass line and preamble blocks marked with [SUBMIT].
+
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{natbib}
+\usepackage{microtype}
+
+\title{Geodesic ODE Activations on $\mathfrak{so}(3,3)$:\\
+       Learned Approximate Lorentz Equivariance\\
+       and Structural Invariance for Tabular Physics}
+
+\author{Author One \\ Affiliation \\ \texttt{email@example.com}}
+
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We investigate two architectural realizations of an $\mathfrak{so}(3,3)$
+inductive bias for tabular classification. Both share a common primitive: a
+learnable geodesic activation that integrates a connection along an ODE
+trajectory in the algebra of the Lorentz-like group $\mathrm{SO}(3,3)$. The
+first realization, \texttt{eta\_invariants}, achieves \emph{structural}
+invariance by reading out only the metric signature; the second,
+\texttt{so33\_equivariant}, lifts inputs into the Clifford-like
+representation, applies the equivariant activation, and reads out via
+invariant pooling. On a controlled synthetic boost-OOD benchmark with a
+$5\times$ rapidity shift, \texttt{eta\_invariants} attains an OOD AUC of
+$1.000$ while a relu MLP collapses to chance. On standard tabular baselines
+(HIGGS, Adult) the architectures are competitive at matched parameter count
+but do not improve over well-tuned MLPs at full width. We measure the
+empirical equivariance of the activation directly (relative error
+$1.3\times10^{-3}$) and report a negative diagnostic: although the activation
+is approximately equivariant by construction, the
+\texttt{so33\_equivariant} architecture loses its OOD advantage during
+training, which we discuss as an open question about learned $\Gamma$
+drift.
+\end{abstract}
+
+%==============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+% TODO Week 5: write 1 page.
+% Key points to cover, in order:
+%   1. Lorentz invariance in collider physics; why OOD-to-boost is a
+%      real failure mode for ML at colliders.
+%   2. Two standard responses: (a) hand-craft invariant features (jet mass,
+%      $p_T$); (b) build equivariant architectures (LGN, LorentzNet, PELICAN).
+%   3. Both responses fix the group action analytically. We ask: what if the
+%      connection were learned? Concretely, can a per-input geodesic on
+%      $\mathrm{SO}(3,3)$ approximate equivariance well enough to help, while
+%      still admitting a structural-invariant variant?
+%   4. Contributions: (i) geodesic ODE activation construction;
+%      (ii) two architectures (structural vs. equivariant); (iii) controlled
+%      OOD evaluation showing structural variant generalizes perfectly,
+%      equivariant variant does not; (iv) honest report on HIGGS/Adult.
+%   5. State explicitly: we do not claim SOTA on top tagging.
+
+\paragraph{Contributions.}
+\begin{itemize}
+  \item A learnable geodesic activation on $\mathfrak{so}(3,3)$ implemented
+        as an ODE integration of a parametric connection
+        (Section~\ref{sec:method-act}).
+  \item Two end-to-end architectures: \texttt{eta\_invariants} (structural)
+        and \texttt{so33\_equivariant} (lift--ODE--readout)
+        (Sections~\ref{sec:method-eta}, \ref{sec:method-equiv}).
+  \item Controlled boost-OOD evaluation
+        (Section~\ref{sec:exp-ood}) showing structural invariance
+        yields perfect generalization where MLPs fail.
+  \item A direct measurement of empirical equivariance of the activation
+        (Section~\ref{sec:exp-equiv}).
+  \item An honest negative result and open question for the equivariant
+        architecture (Section~\ref{sec:discussion}).
+\end{itemize}
+
+%==============================================================================
+\section{Method}
+\label{sec:method}
+
+\subsection{The algebra \texorpdfstring{$\mathfrak{so}(3,3)$}{so(3,3)} and its basis}
+\label{sec:method-algebra}
+% TODO Week 3: 0.5 page.
+% - Signature (-,-,-,+,+,+) and the bilinear form $\eta$.
+% - 15-dim basis: 3 rotations in each of two 3-spaces + 9 mixed boosts.
+% - Why $\mathrm{SO}(3,3)$ rather than $\mathrm{SO}(1,3)$: parameter count,
+%   richer noncompact directions, no physical commitment to a single time axis.
+
+\subsection{Geodesic ODE activation}
+\label{sec:method-act}
+% TODO Week 3: 0.75 page.
+% - Definition: $\sigma_\theta(x) = \phi(1; x)$ where
+%   $\dot\phi(t) = \Gamma_\theta(\phi(t)) \phi(t)$, $\phi(0) = x$.
+% - $\Gamma_\theta: \mathbb{R}^6 \to \mathfrak{so}(3,3)$ is a small MLP whose
+%   output is a linear combination of the 15 generators.
+% - ODE solved with rk4 (fixed step) via torchdiffeq; bound_input flag for
+%   stability under large $|x|$.
+% - Approximate equivariance: if $\Gamma$ depends only on invariants of $x$,
+%   then $\sigma$ commutes with the group action; in practice $\Gamma$ is
+%   trained freely, giving the approximate guarantee measured in
+%   Section~\ref{sec:exp-equiv}.
+
+\subsection{Architecture A: \texttt{eta\_invariants}}
+\label{sec:method-eta}
+% TODO Week 3: 0.25 page.
+% - Linear lift to $\mathbb{R}^6$, then $k$ geodesic activations,
+%   then readout of $\eta$-norms only (3 negative-, 3 positive-signature).
+% - Strictly invariant: the readout sees no group-covariant information.
+
+\subsection{Architecture B: \texttt{so33\_equivariant}}
+\label{sec:method-equiv}
+% TODO Week 3: 0.25 page.
+% - Same lift + activations but readout is invariant pooling over equivariant
+%   features (norms, inner products, etc.) -- mirrors LorentzNet readout.
+% - Differs from \texttt{eta\_invariants} by retaining more covariant signal
+%   through the network depth.
+
+%==============================================================================
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Empirical equivariance}
+\label{sec:exp-equiv}
+% TODO Week 4: 0.25 page + Figure 1.
+% - Sample $x$ from training distribution and $g \in \mathrm{SO}(3,3)$.
+% - Compute $\| \sigma(g x) - g \sigma(x) \| / \| \sigma(x) \|$.
+% - Report number ($1.3\times10^{-3}$) at training-time $\|\Gamma\|$.
+% - Figure 1: relative equivariance error vs $\|\Gamma\|$.
+
+\subsection{Synthetic boost-OOD}
+\label{sec:exp-ood}
+% TODO Week 4: headline. 0.75 page + Table 1 + Figure 2.
+% - Task: binary classification of 6D physics-like points; train on rapidity
+%   $\eta_{train} = 0.6$, test on $\eta_{ood} = 2.5$.
+% - Table 1: id_auc / ood_auc / gap (mean $\pm$ std over 3 seeds) for
+%   {relu_mlp, relu_bottleneck, so33, so33_multi, so33_signature_only,
+%    so33_equivariant, eta_invariants}.
+% - Figure 2: OOD AUC vs rapidity ($0.6 \to 2.5$) curve per architecture.
+
+\subsection{HIGGS}
+\label{sec:exp-higgs}
+% TODO Week 4: 0.5 page + Table 2.
+% - Matched bottleneck (hidden=6) and natural-width settings.
+% - Honest reading: at matched parameters, so33 $\approx$ small MLP within
+%   noise; at natural width, MLP wins.
+
+\subsection{Adult: parameter-efficiency}
+\label{sec:exp-adult}
+% TODO Week 4: 0.25 page + Table 3.
+% - Matched bottleneck: so33\_multi reaches $\approx$ small MLP test acc with
+%   roughly $1/3$ of the parameters.
+
+\subsection{Top tagging: metric-preserving normalization}
+\label{sec:exp-tt}
+% TODO Week 4: 0.25 page.
+% - Per-constituent Deep Sets with so33 vs relu pointwise.
+% - Effect of \texttt{normalize=global} vs \texttt{per\_component} on AUC.
+
+%==============================================================================
+\section{Related work}
+\label{sec:related}
+% TODO Week 5. See paper/notes/related_work.md for the full annotated
+% bibliography and the positioning argument.
+% Must cover, with one-paragraph treatment each:
+%   - LGN \citep{bogatskiy2020lgn}
+%   - LorentzNet \citep{gong2022lorentznet}
+%   - PELICAN \citep{bogatskiy2022pelican}
+%   - EGNN \citep{satorras2021egnn} (broader equivariant background)
+%   - Cohen \& Welling \citep{cohen2016gconv} (foundational)
+%   - Neural ODE \citep{chen2018neuralode} (ODE-as-layer)
+% Positioning: prior Lorentz-equivariant work uses analytic group actions; we
+% replace the action with a learned connection on a related but distinct
+% algebra. Explicitly state that LorentzNet and PELICAN outperform our work
+% on real-world top-tagging benchmarks -- our contribution is methodological.
+
+%==============================================================================
+\section{Discussion and limitations}
+\label{sec:discussion}
+% TODO Week 5. 0.75 page.
+% Honest content:
+%   - The structural-invariant variant works as predicted; the equivariant
+%     variant does not. Why?
+%   - Hypothesis: $\Gamma$ drifts away from invariant-only inputs during
+%     training, breaking the approximate-equivariance precondition.
+%   - Diagnostic to be cited from week-2 results
+%     (paper/notes/equivariant_diagnosis.md).
+%   - Single-seed history; multi-seed numbers presented here.
+%   - We do not improve over MLPs on full-width HIGGS; the contribution is
+%     the OOD-generalization mechanism, not raw accuracy.
+%   - Open question: can $\Gamma$ be regularized to remain
+%     invariant-feature-only without destroying expressivity?
+
+%==============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+% TODO Week 6. 3-4 sentences.
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\appendix
+
+\section{Hyperparameters}
+\label{app:hp}
+% TODO Week 6. Tables of optimizer, lr schedule, epochs, hidden widths,
+% num generators used per model per experiment.
+
+\section{Reproduction commands}
+\label{app:repro}
+% TODO Week 6. The exact shell pipeline from paper/runs/week1.sh,
+% with notes on data download (HIGGS, Top Tagging) and expected wall times.
+
+\end{document}
