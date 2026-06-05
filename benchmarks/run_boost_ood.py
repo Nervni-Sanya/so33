@@ -68,10 +68,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--models", type=str,
                    default=("so33,so33_multi,so33_signature_only,"
                             "relu_bottleneck,relu_mlp,"
-                            "eta_invariants,so33_equivariant"),
-                   help="Comma-separated model names. The last two are the "
-                        "equivariant architectures evaluated on per-particle "
-                        "K=1 sets — they should give ~perfect OOD.")
+                            "eta_invariants,so33_equivariant,"
+                            "so33_equivariant_frozen,"
+                            "so33_equivariant_unbounded"),
+                   help="Comma-separated model names. eta_invariants and "
+                        "so33_equivariant* are set-based; "
+                        "so33_equivariant_frozen and *_unbounded are the "
+                        "week-2 ablations for the equivariant-OOD failure.")
     p.add_argument("--n", type=int, default=20_000)
     p.add_argument("--epochs", type=int, default=40)
     p.add_argument("--seed", type=int, default=0)

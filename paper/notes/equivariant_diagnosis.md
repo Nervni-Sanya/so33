@@ -1,64 +1,99 @@
 # Week-2 task: diagnose why `so33_equivariant` loses OOD generalization
 
-The activation is approximately equivariant by construction (measured
-relative error $\sim 1.3\times 10^{-3}$ on initialization). After training,
-`so33_equivariant` collapses to chance on the $5\times$-boost OOD test
-while `eta_invariants` -- which uses the same activation -- generalizes
-perfectly. The activation is shared, so the regression must come from
-the architecture wrapping it.
+Multi-seed (3) shows the failure is rock-solid reproducible:
+OOD AUC = 0.663 +/- 0.001, while `eta_invariants` (same lift, no
+SO33Activation) reaches 1.000 +/- 0.000. So the failure must come from
+the activation or its wrapper, not from initialisation noise.
 
-## Working hypothesis
+## Corrected hypothesis (after re-reading the code)
 
-The $\Gamma_\theta$ network is conditioned on the *full* hidden vector,
-not just invariants of it. During training it learns to depend on
-covariant components, which destroys the precondition for equivariance
-of the activation. The $\eta$-invariant readout (used by
-`eta_invariants` but not `so33_equivariant`) accidentally protects the
-$\Gamma$ input from co-evolving in a covariant direction.
+`SO33Activation` does **not** have a learnable Γ-network -- the connection
+is parameterised by 15 fixed coefficients, with no input dependence. So
+"Γ drift on covariant features" was the wrong story.
 
-## Measurements to run (one seed each, ~30 min total)
+The actual non-equivariance comes from one place: the `bound_input=True`
+flag, which divides each input by `1 + ||x||_2` where `||.||_2` is the
+**Euclidean** norm. Under an SO(3,3) boost `g`, the Euclidean norm is
+**not** invariant -- it scales roughly like `cosh(rapidity)`. So a
+boosted input gets a different normalisation factor than the original,
+and the activation becomes input-rapidity-dependent.
 
-### 1. Post-training equivariance error
-Load the trained `so33_equivariant` from
-`results/boost_ood__so33_equivariant__seed0.json` (and the corresponding
-state dict -- check `benchmarks/train.py` for save path; add a save call
-if it does not already write weights). Re-run the equivariance-error
-measurement over a held-out validation batch, sampled at $\eta_{train}$
-and at $\eta_{ood}$ separately.
+`EquivariantSO33Classifier` defaults to `bound_input=True` because
+the geodesic ODE under the indefinite metric blows up on unbounded
+inputs. So at construction time, the architecture quietly trades exact
+equivariance for numerical stability. The trade is invisible at training
+rapidity (~0.6, modest renormalisation) but ruinous at OOD rapidity
+(~2.5, ~6x renormalisation).
 
-Expected: error at $\eta_{train}$ small (good), error at $\eta_{ood}$
-much larger -- showing that the activation has become input-distribution-
-dependent rather than truly equivariant.
+`eta_invariants` does not use `SO33Activation` at all -- it builds
+invariants directly from the lifted vector. That is why it generalises
+perfectly.
 
-### 2. Frozen-$\Gamma$ ablation
-Re-run `boost_ood` with `freeze_coeffs=True` on the
-`so33_equivariant` architecture (already supported by the activation;
-check `models.py` for the equivariant model's constructor argument).
+## What to measure (week-2 work, in priority order)
 
-Expected: OOD AUC improves significantly, possibly approaching
-`eta_invariants`. If it does, the diagnosis is confirmed.
+### 1. `benchmarks/diagnose_equivariant.py` -- the smoking gun
+Trains `so33_equivariant` on the standard boost_ood setup, then measures
+the empirical relative equivariance error of the trained activation on
+freshly sampled ID-rapidity inputs vs OOD-rapidity inputs:
 
-### 3. $\Gamma$-input ablation
-Modify the `so33_equivariant` architecture so $\Gamma_\theta$ receives
-only the $\eta$-norms of the hidden vector instead of the full vector.
-Re-run boost_ood. This is the principled fix.
+    err = ||act(g x) - g act(x)||_2 / ||act(x)||_2
 
-Expected: OOD AUC matches or exceeds `eta_invariants`. If it does,
-this becomes a positive paper result rather than an open question.
+**Prediction:** ratio of mean OOD err / mean ID err is `>> 1`
+(probably 5-20x). If so, the bound_input hypothesis is confirmed.
 
-## What to report in the paper
+Run:
+    python -m benchmarks.diagnose_equivariant --seed 0
 
-- Section 5 (Discussion): the hypothesis above, with measurement (1)
-  numbers as evidence.
-- Optional Section 4.7 if measurements (2) or (3) work: a fix that
-  recovers OOD generalization, with a one-row addition to Table 1.
-- If neither (2) nor (3) helps: keep as open question, do not hide it.
+### 2. `so33_equivariant_unbounded` -- the principled fix
+Same architecture but `bound_input=False`. If the geodesic does not
+diverge on this small synthetic dataset, the model should train, and
+OOD AUC should recover toward 1.000.
+
+Run:
+    python -m benchmarks.run_boost_ood --models so33_equivariant_unbounded --seed 0
+
+**Risk:** the integrator may NaN. If so, that itself is a data point
+worth reporting: the indefinite-metric ODE genuinely needs bounding,
+and the current bound is incompatible with equivariance -- which sets
+up a research direction (use an `eta`-invariant bound such as
+`1 + |x^T eta x|^(1/2)` instead of `1 + ||x||_2`).
+
+### 3. `so33_equivariant_frozen` -- the control
+Same architecture, `freeze_coeffs=True`. This isolates whether **any**
+training of the connection is needed -- if frozen still gets 0.663,
+then the failure is purely the bound_input renormalisation, not any
+training-time interaction.
+
+Run:
+    python -m benchmarks.run_boost_ood --models so33_equivariant_frozen --seed 0
 
 ## Decision rule
 
-After week-2 work, decide:
-- **Both (2) and (3) fail to recover OOD AUC:** keep `so33_equivariant`
-  as a documented negative result in Section 5, do not promote.
-- **(2) or (3) recovers OOD AUC:** add a "fixed equivariant" row to
-  Table 1 and a short paragraph in Section 4.
-- **Both work:** prefer (3) for the paper since it is principled.
+Cross-reference the three new numbers with the existing 0.663 baseline:
+
+| measurement                       | reading                                             | implication                          |
+|-----------------------------------|-----------------------------------------------------|--------------------------------------|
+| diagnose OOD/ID err ratio >> 1   | yes (predicted)                                     | bound_input is the cause             |
+| `unbounded` trains, OOD ~ 1.000  | yes                                                 | principled fix; promote to Table 1   |
+| `unbounded` NaNs at training     | yes (also possible)                                 | open question -> Section 5            |
+| `frozen` OOD ~ 0.663             | yes (predicted)                                     | learning Γ irrelevant to the failure |
+| `frozen` OOD significantly higher | unexpected                                          | re-think; some training effect helps |
+
+If `unbounded` works:
+- Add row to Table 1: `so33_equivariant_unbounded` OOD ≈ 1.000.
+- Frame in Section 4: "The default `bound_input` flag protects the
+  indefinite-metric ODE from divergence at the cost of breaking
+  equivariance under non-compact boosts. Disabling it on the controlled
+  OOD setup recovers structural equivariance and restores generalisation
+  to 1.000. Whether an `eta`-invariant bound can be designed that
+  preserves both is an open question we revisit in Section 5."
+
+If `unbounded` NaNs:
+- Report all four numbers honestly in Table 1 plus a one-paragraph
+  diagnosis with the diagnose-script ratio as evidence.
+- The "open question" in Section 5 is then the eta-invariant bound idea.
+
+Either way, the paper has a positive scientific finding from the
+diagnostic work: a clean mechanistic explanation for why an "obviously
+equivariant" architecture loses generalisation, plus an evidence-based
+direction for fixing it.

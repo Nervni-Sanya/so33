@@ -72,6 +72,8 @@ SET_MODELS = (
     # Set-based equivariant classifiers — only valid for representation="constituents".
     "eta_invariants",      # SO(3,3)-invariant features (Arch A)
     "so33_equivariant",    # equivariant lift + SO33 + invariant readout (Arch B)
+    "so33_equivariant_frozen",     # Arch B with freeze_coeffs=True (Γ-drift ablation)
+    "so33_equivariant_unbounded",  # Arch B with bound_input=False (eq-breaking ablation)
 )
 ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS + SET_MODELS
 
@@ -440,6 +442,29 @@ def _build_deepsets(
         return EquivariantSO33Classifier(
             out_features=out_features, T=T, adjoint=adjoint, dtype=dtype,
             bound_input=bound_input, so33_kwargs=so33_kwargs,
+        )
+
+    if name == "so33_equivariant_frozen":
+        # Ablation 1: freeze the connection coefficients. Tests whether
+        # training-time drift in Γ is what destroys OOD generalisation.
+        # If OOD AUC stays ~0.663, learnable Γ is not the cause.
+        return EquivariantSO33Classifier(
+            out_features=out_features, T=T, adjoint=adjoint, dtype=dtype,
+            bound_input=bound_input,
+            so33_kwargs=dict(so33_kwargs, freeze_coeffs=True),
+        )
+
+    if name == "so33_equivariant_unbounded":
+        # Ablation 2: disable the bound_input normalisation. The default
+        # bound_input divides by  1 + ||x||_2 , and the Euclidean norm is
+        # NOT an SO(3,3) invariant -- boosted inputs are scaled by a
+        # different factor, so the activation loses equivariance with
+        # input rapidity. Removing the bound restores exact equivariance
+        # at the risk of geodesic blow-up; if OOD AUC recovers, the
+        # bound is confirmed as the cause.
+        return EquivariantSO33Classifier(
+            out_features=out_features, T=T, adjoint=adjoint, dtype=dtype,
+            bound_input=False, so33_kwargs=so33_kwargs,
         )
 
     pointwise: dict[str, Callable[[], nn.Module]] = {
