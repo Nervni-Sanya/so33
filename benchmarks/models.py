@@ -72,8 +72,9 @@ SET_MODELS = (
     # Set-based equivariant classifiers — only valid for representation="constituents".
     "eta_invariants",      # SO(3,3)-invariant features (Arch A)
     "so33_equivariant",    # equivariant lift + SO33 + invariant readout (Arch B)
-    "so33_equivariant_frozen",     # Arch B with freeze_coeffs=True (Γ-drift ablation)
-    "so33_equivariant_unbounded",  # Arch B with bound_input=False (eq-breaking ablation)
+    "so33_equivariant_frozen",       # Arch B with freeze_coeffs=True
+    "so33_equivariant_unbounded",    # Arch B with bound_input=False
+    "so33_equivariant_eta_bounded",  # Arch B with eta-invariant input bound
 )
 ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS + SET_MODELS
 
@@ -345,7 +346,7 @@ class EquivariantSO33Classifier(nn.Module):
         T: float = 0.3,
         adjoint: bool = True,
         dtype: torch.dtype = torch.float64,
-        bound_input: bool = True,
+        bound_input: bool | str = True,
         head_hidden: int = 32,
         so33_kwargs: dict | None = None,
     ) -> None:
@@ -465,6 +466,19 @@ def _build_deepsets(
         return EquivariantSO33Classifier(
             out_features=out_features, T=T, adjoint=adjoint, dtype=dtype,
             bound_input=False, so33_kwargs=so33_kwargs,
+        )
+
+    if name == "so33_equivariant_eta_bounded":
+        # Principled fix: replace the Euclidean-norm bound with the
+        # eta-norm bound  x / (1 + sqrt(|x . eta . x|)). This is
+        # SO(3,3)-invariant by construction (x . eta . x is the
+        # indefinite-metric invariant), so equivariance is preserved
+        # exactly while the input is still bounded for ODE stability on
+        # real-data settings (HIGGS, top tagging) where the unbounded
+        # variant diverges.
+        return EquivariantSO33Classifier(
+            out_features=out_features, T=T, adjoint=adjoint, dtype=dtype,
+            bound_input="eta", so33_kwargs=so33_kwargs,
         )
 
     pointwise: dict[str, Callable[[], nn.Module]] = {

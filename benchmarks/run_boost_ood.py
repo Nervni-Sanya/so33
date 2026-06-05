@@ -70,11 +70,13 @@ def main(argv: list[str] | None = None) -> int:
                             "relu_bottleneck,relu_mlp,"
                             "eta_invariants,so33_equivariant,"
                             "so33_equivariant_frozen,"
-                            "so33_equivariant_unbounded"),
+                            "so33_equivariant_unbounded,"
+                            "so33_equivariant_eta_bounded"),
                    help="Comma-separated model names. eta_invariants and "
-                        "so33_equivariant* are set-based; "
-                        "so33_equivariant_frozen and *_unbounded are the "
-                        "week-2 ablations for the equivariant-OOD failure.")
+                        "so33_equivariant* are set-based; the *_frozen, "
+                        "*_unbounded and *_eta_bounded variants are the "
+                        "week-2/3 ablations for the equivariant-OOD "
+                        "failure mode and its principled fix.")
     p.add_argument("--n", type=int, default=20_000)
     p.add_argument("--epochs", type=int, default=40)
     p.add_argument("--seed", type=int, default=0)

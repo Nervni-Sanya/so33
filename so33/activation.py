@@ -52,7 +52,7 @@ import torch
 import torch.nn as nn
 from torchdiffeq import odeint, odeint_adjoint
 
-from .basis import get_basis_stack, get_connection_tensor, N_BASIS
+from .basis import get_basis_stack, get_connection_tensor, N_BASIS, ETA
 from .ode_func import ODEFunc
 
 
@@ -82,20 +82,31 @@ class SO33Activation(nn.Module):
                              which isolates whether *learning* the connection
                              matters versus simply having geometric structure.
                              Default False.
-    bound_input    : bool    When True, normalise each input vector to a
-                             bounded magnitude before integration:
-                                 x' = x / (1 + ||x||_2)
-                             so ||x'|| < 1. The geodesic ODE under an
-                             indefinite metric can diverge exponentially,
-                             which makes the adaptive solver fail with
-                             ``underflow in dt`` on real-data inputs (e.g.
-                             standardised tabular features through a Linear
-                             projection). Bounding the initial state keeps
-                             ||v||² in check throughout the integration.
-                             Default False (preserves the analytical
-                             behaviour expected by the existing tests; the
-                             SO33Network convenience wrapper enables it by
-                             default).
+    bound_input    : bool or str
+                             Input-bounding mode for ODE stability:
+                               False / "none"      -- no bound (default).
+                               True  / "euclidean" -- divide by 1 + ||x||_2.
+                                                      Bounds ||x|| < 1.
+                                                      NOT SO(3,3) invariant
+                                                      (Euclidean norm scales
+                                                      under boosts).
+                               "eta"               -- divide by
+                                                      1 + sqrt(|x . eta . x|+eps).
+                                                      Bounds the eta-magnitude
+                                                      of the input. IS SO(3,3)
+                                                      invariant by construction
+                                                      since x . eta . x is the
+                                                      indefinite-metric invariant.
+                             The geodesic ODE under the indefinite metric can
+                             diverge exponentially, which makes the adaptive
+                             solver fail with ``underflow in dt`` on real-data
+                             inputs. ``"euclidean"`` was the original fix; it
+                             trades exact equivariance for stability and is
+                             what breaks the so33_equivariant OOD generalisation
+                             (the non-invariant denominator propagates into the
+                             eta-invariant readout). ``"eta"`` is the principled
+                             alternative that keeps both stability AND
+                             SO(3,3) equivariance.
 
     Input  : (B, 6) tensor — cast to the layer dtype internally.
     Output : (B, 6) tensor in the layer dtype.
@@ -112,11 +123,25 @@ class SO33Activation(nn.Module):
         dtype: torch.dtype = torch.float64,
         signature_only: bool = False,
         freeze_coeffs: bool = False,
-        bound_input: bool = False,
+        bound_input: bool | str = False,
         max_input_norm: float | None = None,
         solver_options: dict | None = None,
     ) -> None:
         super().__init__()
+
+        # Normalise bound_input to a string mode for forward-pass dispatch.
+        # Accept legacy bool values for backwards compatibility.
+        if bound_input is False:
+            bound_mode = "none"
+        elif bound_input is True:
+            bound_mode = "euclidean"
+        elif bound_input in ("none", "euclidean", "eta"):
+            bound_mode = bound_input
+        else:
+            raise ValueError(
+                f"bound_input must be bool or one of "
+                f"'none'/'euclidean'/'eta'; got {bound_input!r}"
+            )
 
         self.T              = T
         self.rtol           = rtol
@@ -126,13 +151,15 @@ class SO33Activation(nn.Module):
         self.reg_coef       = reg_coef
         self.dtype          = dtype
         self.signature_only = signature_only
-        self.bound_input    = bound_input
+        self.bound_input    = bound_mode
         self.max_input_norm = max_input_norm
         self.solver_options = dict(solver_options) if solver_options else None
 
         # ── Fixed basis (non-trainable, moves with .to(device)) ───────────────
         basis = get_basis_stack(dtype=dtype, signature_only=signature_only)
         self.register_buffer("basis_stack", basis)               # (K, 6, 6, 6)
+        # eta vector for the "eta" input-bound mode (SO(3,3) invariant).
+        self.register_buffer("eta_diag", ETA.to(dtype))
         n_coeffs = basis.shape[0]
 
         # ── Trainable parameters: K connection coefficients ───────────────────
@@ -178,14 +205,27 @@ class SO33Activation(nn.Module):
         y : (B, 6) tensor — terminal state v(T), in self.dtype
         """
         x = x.to(self.dtype)
-        if self.bound_input:
+        if self.bound_input == "euclidean":
             # Bound ||x||_2 < 1 so ||v||² stays manageable through the ODE.
             # Without this the indefinite-metric trajectory can blow up
             # exponentially on inputs of moderate magnitude (e.g. standardised
             # tabular features through a Linear), causing the adaptive solver
             # to underflow dt to zero. Differentiable; trains end-to-end.
+            # NOTE: the Euclidean norm is NOT SO(3,3)-invariant, so this mode
+            # breaks equivariance under non-compact boosts (see "eta" mode).
             x_norm = x.norm(dim=-1, keepdim=True)
             x = x / (1.0 + x_norm)
+        elif self.bound_input == "eta":
+            # Eta-norm bound. x . eta . x is the SO(3,3) invariant of x,
+            # so dividing by 1 + sqrt(|x . eta . x|) preserves equivariance
+            # exactly: act(g x) = g act(x) for any g in SO(3,3). For
+            # spacelike vectors (x . eta . x > 0) sqrt(...) acts directly;
+            # for timelike vectors (x . eta . x < 0) the abs() takes the
+            # proper-mass magnitude. The 1e-12 eps guards null vectors
+            # (x . eta . x = 0) and keeps the gradient finite at the origin.
+            inner = (x * self.eta_diag * x).sum(dim=-1, keepdim=True)
+            eta_norm = (inner.abs() + 1e-12).sqrt()
+            x = x / (1.0 + eta_norm)
         elif self.max_input_norm is not None:
             # Soft norm cap: leave typical inputs untouched but rescale only
             # the heavy-tailed outliers whose ||x|| exceeds the cap. This
