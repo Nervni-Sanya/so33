@@ -38,8 +38,9 @@ replacing the `\documentclass` line and the small preamble block marked
 - [x] Week 1: seeds×3 runs (`runs/week1.sh`) — done, aggregated in
       `notes/results_week1.md`.
 - [ ] Week 1: literature scan.
-- [ ] Week 2: `so33_equivariant` diagnosis
-      (`notes/equivariant_diagnosis.md` -> findings inline).
+- [x] Week 2: `so33_equivariant` diagnosis -- bound_input identified as
+      cause; `so33_equivariant_unbounded` recovers OOD 1.000. See
+      `notes/diagnosis_findings.md`. Pending: seeds 1-2 for the new row.
 - [ ] Week 3: write `\section{Method}`.
 - [ ] Week 4: write `\section{Experiments}` + figures.
 - [ ] Week 5: write `\section{Introduction}`, `\section{Related work}`,

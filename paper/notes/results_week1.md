@@ -7,22 +7,32 @@ are in `results/` on that box and should be copied into the repo's
 
 ## boost_ood (rapidity 0.6 -> 2.5)
 
-| model               | params | id_auc          | ood_auc           | gap             |
-|---------------------|--------|-----------------|-------------------|-----------------|
-| eta_invariants      | 4802   | 1.000 +/- 0.000 | **1.000 +/- 0.000** | +0.000          |
-| relu_mlp            | 2306   | 1.000 +/- 0.000 | 0.944 +/- 0.004   | +0.056          |
-| so33_multi          | 278    | 1.000 +/- 0.000 | 0.888 +/- 0.004   | +0.112          |
-| so33                | 71     | 1.000 +/- 0.000 | 0.880 +/- 0.005   | +0.120          |
-| so33_signature_only | 62     | 1.000 +/- 0.000 | 0.880 +/- 0.006   | +0.120          |
-| relu_bottleneck     | 56     | 1.000 +/- 0.000 | 0.876 +/- 0.004   | +0.124          |
-| so33_equivariant    | 542    | 0.999 +/- 0.001 | 0.663 +/- 0.001   | +0.336          |
+| model                          | params | id_auc          | ood_auc             | gap     |
+|--------------------------------|--------|-----------------|---------------------|---------|
+| eta_invariants                 | 4802   | 1.000 +/- 0.000 | **1.000 +/- 0.000** | +0.000  |
+| **so33_equivariant_unbounded** | 542    | 1.000 (n=1)     | **1.000 (n=1)**     | +0.000  |
+| relu_mlp                       | 2306   | 1.000 +/- 0.000 | 0.944 +/- 0.004     | +0.056  |
+| so33_multi                     | 278    | 1.000 +/- 0.000 | 0.888 +/- 0.004     | +0.112  |
+| so33                           | 71     | 1.000 +/- 0.000 | 0.880 +/- 0.005     | +0.120  |
+| so33_signature_only            | 62     | 1.000 +/- 0.000 | 0.880 +/- 0.006     | +0.120  |
+| relu_bottleneck                | 56     | 1.000 +/- 0.000 | 0.876 +/- 0.004     | +0.124  |
+| so33_equivariant (default)     | 542    | 0.999 +/- 0.001 | 0.663 +/- 0.001     | +0.336  |
+| so33_equivariant_frozen        | 482    | 0.999 (n=1)     | 0.662 (n=1)         | +0.337  |
 
 Notes for the paper:
 - **Honest framing:** relu_mlp degrades to 0.944, not chance. The headline
   is *the gap*: 0.000 (eta_invariants) vs 0.056 (relu_mlp). Do not write
   "MLP collapses".
-- `so33_equivariant` failure is rock-solid reproducible across seeds
-  (std = 0.001) -- worth a Section-5 diagnostic, not "noise".
+- `so33_equivariant` (default) failure is rock-solid reproducible across
+  seeds (std = 0.001). Week-2 diagnosis (see `diagnosis_findings.md`)
+  traced it to the non-invariant `bound_input` Euclidean norm.
+- `so33_equivariant_unbounded` = the same Arch B with `bound_input=False`.
+  Recovers OOD 1.000 (seed 0). The +0.337 gap was an architectural flaw,
+  not a limitation of the equivariant lift + ODE approach. Needs seeds
+  1, 2 to put an error bar on the new headline row.
+- `so33_equivariant_frozen` (freeze coeffs): OOD 0.662, identical to the
+  default -- confirms the failure is unrelated to *training* the
+  connection (the coeffs collapse to ~0 anyway).
 
 ## HIGGS, matched bottleneck (hidden=6)
 

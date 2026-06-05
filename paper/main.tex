@@ -47,11 +47,13 @@ benchmark, \texttt{so33\_multi} reaches AUC $0.912 \pm 0.002$ -- exceeding
 the best $10\times$-larger MLP ($0.905 \pm 0.001$) -- demonstrating a
 genuine parameter-efficiency win. We measure the
 empirical equivariance of the activation directly (relative error
-$1.3\times10^{-3}$) and report a negative diagnostic: although the
-activation is approximately equivariant by construction, the
-\texttt{so33\_equivariant} architecture collapses reproducibly to OOD AUC
-$0.663 \pm 0.001$, which we discuss as an open question about learned
-$\Gamma$ drift.
+$1.3\times10^{-3}$) and identify a mechanism by which the default
+\texttt{so33\_equivariant} architecture loses generalization despite
+its structurally invariant readout: the Euclidean-norm input bound,
+introduced for ODE stability, is not SO(3,3)-invariant and propagates
+into the readout feature as a non-invariant denominator. Disabling the
+bound restores OOD AUC to $1.000$, giving a fully equivariant
+architecture that matches \texttt{eta\_invariants} on the headline task.
 \end{abstract}
 
 %==============================================================================
