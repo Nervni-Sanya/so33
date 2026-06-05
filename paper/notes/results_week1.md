@@ -11,6 +11,7 @@ are in `results/` on that box and should be copied into the repo's
 |--------------------------------|--------|-----------------|---------------------|---------|
 | eta_invariants                 | 4802   | 1.000 +/- 0.000 | **1.000 +/- 0.000** | +0.000  |
 | **so33_equivariant_unbounded** | 542    | 1.000 +/- 0.000 | **1.000 +/- 0.000** | +0.000  |
+| **so33_equivariant_eta_bounded** | 542  | 1.000 +/- 0.000 | **1.000 +/- 0.000** | +0.000  |
 | relu_mlp                       | 2306   | 1.000 +/- 0.000 | 0.944 +/- 0.004     | +0.056  |
 | so33_multi                     | 278    | 1.000 +/- 0.000 | 0.888 +/- 0.004     | +0.112  |
 | so33                           | 71     | 1.000 +/- 0.000 | 0.880 +/- 0.005     | +0.120  |
@@ -30,7 +31,16 @@ Notes for the paper:
   Recovers OOD 1.000 +/- 0.000 across 3 seeds, matching `eta_invariants`.
   The +0.337 gap was an architectural flaw (Euclidean-norm bound breaks
   SO(3,3) invariance via the readout denominator), not a limitation of
-  the equivariant lift + ODE approach. Single-line fix.
+  the equivariant lift + ODE approach.
+- `so33_equivariant_eta_bounded` = the principled fix: same Arch B with
+  `bound_input="eta"`, dividing by `1 + sqrt(|x . eta . x|)`. This bound
+  is itself SO(3,3)-invariant (x . eta . x is the indefinite-metric
+  invariant). OOD 1.000 +/- 0.000 across 3 seeds; readout-feature
+  invariance verified at machine precision (1.4e-15). Compared to
+  `unbounded`, this variant ALSO bounds the input so the indefinite-
+  metric ODE stays stable -- pending top-tagging confirmation that
+  this is enough to prevent the geodesic divergence that motivated
+  bound_input in the first place.
 - `so33_equivariant_frozen` (freeze coeffs): OOD 0.662, identical to the
   default -- confirms the failure is unrelated to *training* the
   connection (the coeffs collapse to ~0 anyway).

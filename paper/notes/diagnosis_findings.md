@@ -103,23 +103,44 @@ non-invariance issue. The HIGGS results are unaffected.
 
 ## Multi-seed confirmed (3/3 seeds 1.000)
 
-Seeds 0, 1, 2 all returned OOD AUC = 1.000 for
-`so33_equivariant_unbounded`. The new headline row has std = 0.000
-to printed precision -- as solid as `eta_invariants`.
+Seeds 0, 1, 2 all returned OOD AUC = 1.000 for both
+`so33_equivariant_unbounded` AND `so33_equivariant_eta_bounded`. Both
+new headline rows have std = 0.000 to printed precision -- as solid
+as `eta_invariants`.
 
-## Pending: η-invariant bound prototype (optional)
+## eta-invariant bound IMPLEMENTED and confirmed on synthetic
 
-If we want to take the paper from "fixed on synthetic, open on real
-data" to "fixed everywhere", a small follow-up experiment:
+The optional follow-up is done. `SO33Activation.bound_input="eta"`
+divides by `1 + sqrt(|x . eta . x| + eps)`, an SO(3,3)-invariant
+divisor. Equivariance of the readout feature is preserved at machine
+precision:
 
-1. Add a `bound_input_mode` flag to SO33Activation: `"euclidean"`
-   (current default), `"eta"` (new). The eta mode divides by
-   `1 + sqrt(|x·η·x| + eps)`, which IS SO(3,3) invariant.
-2. Verify it does not diverge on top-tagging constituents (the
-   original motivation for bound_input).
-3. Add to Table 1 as `so33_equivariant_eta_bounded`. If it works
-   on both synthetic AND keeps top-tagging stable, that becomes
-   the recommended default.
+    E |m^2(act x) - m^2(act g x)|   (random connection, rapidity-0.6 boost)
+      bound=none       1.26e-10
+      bound=euclidean  1.98e-01   <- the bug
+      bound=eta        1.37e-15   <- the fix
 
-This is roughly 1-2 hours of code + 30 minutes of training. Worth
-doing for the paper but not blocking.
+boost-OOD: so33_equivariant_eta_bounded = 1.000 +/- 0.000 (3 seeds).
+
+Remaining check: run on top-tagging CONSTITUENTS (not aggregated) to
+confirm the eta-bound keeps the indefinite-metric ODE stable on
+real-data inputs, where the unbounded variant was expected to diverge.
+The aggregated jet-level path SKIPs set-based models by design.
+
+Correct command:
+
+    python -m benchmarks.run_top_tagging \
+        --representation constituents \
+        --models so33_equivariant_eta_bounded,so33_equivariant_unbounded \
+        --seed 0
+
+If eta_bounded trains stably AND unbounded NaNs/diverges, that is the
+clean evidence that the eta-bound is the right real-data default: it
+fixes equivariance WITHOUT sacrificing the stability that motivated
+bound_input originally. That turns the paper's Arch B story from
+"fixed on synthetic, open on real data" into "fixed everywhere".
+
+## Status of the eta-invariant bound
+
+DONE on the implementation + synthetic side (see section above).
+Only the top-tagging-constituents stability confirmation remains.
