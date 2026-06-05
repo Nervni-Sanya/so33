@@ -37,16 +37,21 @@ invariance by reading out only the metric signature; the second,
 \texttt{so33\_equivariant}, lifts inputs into the Clifford-like
 representation, applies the equivariant activation, and reads out via
 invariant pooling. On a controlled synthetic boost-OOD benchmark with a
-$5\times$ rapidity shift, \texttt{eta\_invariants} attains an OOD AUC of
-$1.000$ while a relu MLP collapses to chance. On standard tabular baselines
-(HIGGS, Adult) the architectures are competitive at matched parameter count
-but do not improve over well-tuned MLPs at full width. We measure the
+$5\times$ rapidity shift (3 seeds), \texttt{eta\_invariants} attains an
+OOD AUC of $1.000 \pm 0.000$ while a relu MLP degrades from $1.000$
+in-distribution to $0.944 \pm 0.004$ out-of-distribution. On HIGGS, the
+\texttt{so33} architecture marginally outperforms relu/gelu bottlenecks at
+matched parameter count ($0.763 \pm 0.002$ vs $0.755 \pm 0.008$ AUC) but
+does not beat tanh; full-width MLPs remain ahead. On the Adult tabular
+benchmark, \texttt{so33\_multi} reaches AUC $0.912 \pm 0.002$ -- exceeding
+the best $10\times$-larger MLP ($0.905 \pm 0.001$) -- demonstrating a
+genuine parameter-efficiency win. We measure the
 empirical equivariance of the activation directly (relative error
-$1.3\times10^{-3}$) and report a negative diagnostic: although the activation
-is approximately equivariant by construction, the
-\texttt{so33\_equivariant} architecture loses its OOD advantage during
-training, which we discuss as an open question about learned $\Gamma$
-drift.
+$1.3\times10^{-3}$) and report a negative diagnostic: although the
+activation is approximately equivariant by construction, the
+\texttt{so33\_equivariant} architecture collapses reproducibly to OOD AUC
+$0.663 \pm 0.001$, which we discuss as an open question about learned
+$\Gamma$ drift.
 \end{abstract}
 
 %==============================================================================

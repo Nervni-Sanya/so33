@@ -35,7 +35,9 @@ replacing the `\documentclass` line and the small preamble block marked
 
 ## Status (filled in as work progresses)
 
-- [ ] Week 1: seeds×3 runs (`runs/week1.sh`) + literature scan.
+- [x] Week 1: seeds×3 runs (`runs/week1.sh`) — done, aggregated in
+      `notes/results_week1.md`.
+- [ ] Week 1: literature scan.
 - [ ] Week 2: `so33_equivariant` diagnosis
       (`notes/equivariant_diagnosis.md` -> findings inline).
 - [ ] Week 3: write `\section{Method}`.
