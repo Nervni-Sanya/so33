@@ -9,7 +9,7 @@ direct ablation, REFINED by the diagnose-script results.
 |----------------------------------|--------|--------|---------|---------|
 | so33_equivariant (default)       | 542    | 0.999  | 0.663   | +0.337  |
 | so33_equivariant_frozen          | 482    | 0.999  | 0.662   | +0.337  |
-| **so33_equivariant_unbounded**   | 542    | 1.000  | **1.000** | +0.000 |
+| **so33_equivariant_unbounded**   | 542    | 1.000 +/- 0.000 | **1.000 +/- 0.000** | +0.000 |
 | eta_invariants (reference)       | 4802   | 1.000  | 1.000   | +0.000  |
 
 Disabling `bound_input` is the entire fix. Architecture B now matches
@@ -101,15 +101,11 @@ The flat-tabular path uses `max_input_norm` (soft cap) instead of
 `bound_input` (everywhere scaling), so it does not have the same
 non-invariance issue. The HIGGS results are unaffected.
 
-## Pending: multi-seed for the new headline row
+## Multi-seed confirmed (3/3 seeds 1.000)
 
-Single-seed 1.000 is plausibly noise-free (eta_invariants also got
-1.000 on all 3 seeds), but to be rigorous before the paper:
-
-    python -m benchmarks.run_boost_ood --models so33_equivariant_unbounded --seed 1
-    python -m benchmarks.run_boost_ood --models so33_equivariant_unbounded --seed 2
-
-About 8 minutes per seed.
+Seeds 0, 1, 2 all returned OOD AUC = 1.000 for
+`so33_equivariant_unbounded`. The new headline row has std = 0.000
+to printed precision -- as solid as `eta_invariants`.
 
 ## Pending: η-invariant bound prototype (optional)
 

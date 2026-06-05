@@ -10,7 +10,7 @@ are in `results/` on that box and should be copied into the repo's
 | model                          | params | id_auc          | ood_auc             | gap     |
 |--------------------------------|--------|-----------------|---------------------|---------|
 | eta_invariants                 | 4802   | 1.000 +/- 0.000 | **1.000 +/- 0.000** | +0.000  |
-| **so33_equivariant_unbounded** | 542    | 1.000 (n=1)     | **1.000 (n=1)**     | +0.000  |
+| **so33_equivariant_unbounded** | 542    | 1.000 +/- 0.000 | **1.000 +/- 0.000** | +0.000  |
 | relu_mlp                       | 2306   | 1.000 +/- 0.000 | 0.944 +/- 0.004     | +0.056  |
 | so33_multi                     | 278    | 1.000 +/- 0.000 | 0.888 +/- 0.004     | +0.112  |
 | so33                           | 71     | 1.000 +/- 0.000 | 0.880 +/- 0.005     | +0.120  |
@@ -27,9 +27,10 @@ Notes for the paper:
   seeds (std = 0.001). Week-2 diagnosis (see `diagnosis_findings.md`)
   traced it to the non-invariant `bound_input` Euclidean norm.
 - `so33_equivariant_unbounded` = the same Arch B with `bound_input=False`.
-  Recovers OOD 1.000 (seed 0). The +0.337 gap was an architectural flaw,
-  not a limitation of the equivariant lift + ODE approach. Needs seeds
-  1, 2 to put an error bar on the new headline row.
+  Recovers OOD 1.000 +/- 0.000 across 3 seeds, matching `eta_invariants`.
+  The +0.337 gap was an architectural flaw (Euclidean-norm bound breaks
+  SO(3,3) invariance via the readout denominator), not a limitation of
+  the equivariant lift + ODE approach. Single-line fix.
 - `so33_equivariant_frozen` (freeze coeffs): OOD 0.662, identical to the
   default -- confirms the failure is unrelated to *training* the
   connection (the coeffs collapse to ~0 anyway).
