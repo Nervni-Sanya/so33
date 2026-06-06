@@ -45,7 +45,13 @@ matched parameter count ($0.763 \pm 0.002$ vs $0.755 \pm 0.008$ AUC) but
 does not beat tanh; full-width MLPs remain ahead. On the Adult tabular
 benchmark, \texttt{so33\_multi} reaches AUC $0.912 \pm 0.002$ -- exceeding
 the best $10\times$-larger MLP ($0.905 \pm 0.001$) -- demonstrating a
-genuine parameter-efficiency win. We measure the
+genuine parameter-efficiency win. On top-tagging constituents, the
+pairwise $\eta$-inner-product readout of \texttt{eta\_invariants}
+attains AUC $0.944 \pm 0.0005$ (3 seeds), far above non-invariant
+matched-bottleneck baselines on the identical split ($0.759$ relu,
+$0.750$ signature-only); we report this on a 100k-jet internal split
+and do not claim parity with dedicated Lorentz-equivariant taggers on
+the canonical benchmark. We measure the
 empirical equivariance of the activation directly (relative error
 $1.3\times10^{-3}$) and identify a mechanism by which the default
 \texttt{so33\_equivariant} architecture loses generalization despite

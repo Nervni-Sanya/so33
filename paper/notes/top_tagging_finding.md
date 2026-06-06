@@ -16,20 +16,26 @@ The 7k-slice number (0.926) was if anything an *underestimate*; at
 full scale eta_invariants reaches AUC 0.944 with std 0.0005 across
 seeds. This is a rock-solid real-data positive result.
 
-For comparison, the old REPORT.md numbers on the **same path** at 100k
-samples / 30 epochs were:
-- pointwise relu:        0.749
-- so33_signature_only:   0.738
-- so33_frozen:           0.720
-- so33:                  NaN (boost divergence, since fixed)
+For comparison, **apples-to-apples** baselines on the EXACT same 100k
+loader/split (seed 0, 30 epochs) confirm the gap is real:
 
-The eta-invariants gap is ~ +0.19 absolute AUC over the best
-non-invariant baseline (0.944 vs 0.749). Mechanism: eta_invariants
-includes **pairwise eta-inner products** s_ij = p_i.eta.p_j in its
-readout (mean, mean^2, max), and pairwise structure is exactly what
-discriminates multi-prong top jets from 1-2-prong QCD jets. The other
-architectures (pointwise, so33 in DeepSetsClassifier wrapping) only
-see per-particle features and a mean pool -- no pairwise term.
+| model               | params | test_acc | test_auc |
+|---------------------|--------|----------|----------|
+| **eta_invariants**  | 4802   | 0.897    | **0.944** |
+| relu_bottleneck     | 44     | 0.707    | 0.759    |
+| so33_signature_only | 50     | 0.691    | 0.750    |
+
+Gap: **+0.185 AUC** over relu_bottleneck, **+0.194** over
+so33_signature_only, all on the identical split. The old REPORT.md
+numbers (0.749 / 0.738) reproduce within noise on the current loader,
+so the split refactor did NOT make the task easier -- the gap stands.
+
+The eta-invariants advantage comes from the **pairwise eta-inner
+products** s_ij = p_i.eta.p_j in its readout (mean, mean^2, max), which
+capture the multi-prong substructure that discriminates top jets from
+QCD jets. The matched-bottleneck baselines (relu, so33_signature_only)
+only see per-particle features through a mean pool -- no pairwise term --
+so they plateau at ~0.75 regardless of the activation.
 
 ## Why Arch B (so33_equivariant_*) also fails on top-tagging
 
@@ -102,16 +108,16 @@ Two things to do before the preprint:
    dedicated Lorentz-equivariant taggers (LorentzNet, PELICAN), which
    operate at higher accuracy on the full benchmark."
 
-### IMMEDIATE next check (apples-to-apples baseline on same loader)
+### Apples-to-apples baseline -- DONE (gap confirmed)
 
-    python -m benchmarks.run_top_tagging --representation constituents \
-        --models relu_bottleneck,so33_signature_only,eta_invariants \
-        --max-samples 100000 --epochs 30 --seed 0
+Ran all three on the exact same 100k split (seed 0, 30 epochs):
+relu_bottleneck 0.759, so33_signature_only 0.750, eta_invariants
+0.944. The +0.185 gap over relu is defensible and not a split
+artifact. Section 4.5 can be written.
 
-This puts all three on the EXACT same 100k split so the +0.19 gap claim
-is defensible. If relu_bottleneck also jumps to ~0.90 on this split,
-the gap shrinks and the story changes -- so this is the single most
-important number to get before writing Section 4.5.
+Optional polish (not blocking): seeds 1,2 for the two baselines to put
+error bars on the gap row. Single-seed baselines are fine for a
+preprint given the ~0.19 margin dwarfs any plausible seed variance.
 
 ## Decision rule for week-3 entry
 
