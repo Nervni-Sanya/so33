@@ -64,5 +64,12 @@ replacing the `\documentclass` line and the small preamble block marked
       All 7 \citep keys resolve to refs.bib (no dangling refs). The
       Discussion uses the correct diagnosis (non-invariant bound, not
       the earlier "Gamma drift" hypothesis).
-- [ ] Week 6: polish (compile locally, verify refs render, fill
-      Appendix hyperparameters + reproduction commands), arXiv upload.
+- [x] Week 6 (content): Appendix A (hyperparameters) and Appendix B
+      (reproduction commands) written. ~4080 words total, LaTeX
+      structurally validated (474/474 braces, 686/686 inline math, 7/7
+      env types balanced, 0 dangling \citep). Paper content COMPLETE.
+- [ ] Week 6 (mechanical): compile locally
+      (`pdflatex && bibtex && pdflatex && pdflatex`), check refs/tables
+      /Figure 1 render, optionally verify the `% verify:` arXiv IDs in
+      refs.bib, then upload to arXiv (suggested categories: cs.LG
+      primary, hep-ph cross-list).

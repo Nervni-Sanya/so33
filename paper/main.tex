@@ -723,12 +723,130 @@ the natural next steps.
 
 \section{Hyperparameters}
 \label{app:hp}
-% TODO Week 6. Tables of optimizer, lr schedule, epochs, hidden widths,
-% num generators used per model per experiment.
+
+All experiments share the same outer training loop: Adam optimizer with
+learning rate $3\times 10^{-3}$, no weight decay, batch size $128$,
+cosine learning-rate schedule from initial $\mathrm{lr}$ to zero over
+the training horizon, gradient norm clipped at $1.0$, and
+cross-entropy loss augmented by the activation's Frobenius regularizer
+$\lambda \lVert\omega\rVert_F^2$ with $\lambda = 10^{-3}$ when an SO33
+activation is present. Validation is computed on a held-out
+$15\%$ slice of the training pool. We use float$64$ parameters and
+activations throughout to keep the indefinite-metric ODE numerically
+well-behaved.
+
+\paragraph{ODE solver.} The geodesic flow \eqref{eq:ode} is integrated
+with a fixed-step fourth-order Runge--Kutta scheme over $t \in [0, T]$
+with $T = 0.3$ and step $T/10 = 0.03$, giving $10$ right-hand-side
+evaluations per particle. The fixed step avoids the
+$\mathrm{d}t$-underflow that an adaptive integrator suffers when the
+trajectory steepens; classification accuracy is insensitive to
+$\{T, \mathrm{step}\}$ within $\pm 30\%$ on the synthetic task.
+
+\paragraph{Per-experiment widths and epochs.} Table~\ref{tab:hp}
+summarizes the per-experiment settings. The matched-bottleneck width is
+$6$ for all such variants; natural-width MLPs use $256$; the
+\texttt{so33\_multi} variant uses $4$ parallel SO33 channels; the
+\texttt{eta\_invariants} and \texttt{so33\_equivariant} families use a
+small two-layer MLP head ($32$ hidden units).
+
+\begin{table}[h]
+  \centering
+  \caption{Per-experiment training horizons and key knobs.}
+  \label{tab:hp}
+  \begin{tabular}{lrrr}
+    \toprule
+    experiment & epochs & $n_\text{train}$ & input bound default \\
+    \midrule
+    boost-OOD synthetic   & $40$ & $8{,}500$    & per-variant (see \S\ref{sec:method-act}) \\
+    HIGGS                 & $30$ & $140{,}000$  & \texttt{max\_input\_norm=8} (soft cap) \\
+    Adult (neutral)       & $30$ & $34{,}189$   & \texttt{max\_input\_norm=8} (soft cap) \\
+    top tagging (constituents) & $30$ & $70{,}000$ & $\beta_{\text{euc}}$ (constituent path default) \\
+    equivariance probe    & --   & $256$        & swept (\S\ref{sec:exp-equiv}) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The HIGGS and Adult tabular paths use a soft norm cap that rescales
+only inputs whose magnitude exceeds the cap; this is differentiable and
+preserves the typical-input signal while preventing rare-large-input
+geodesic blow-up. The constituent path of top tagging instead uses the
+hard $\beta_{\text{euc}}$ bound from \eqref{eq:bounds} for the
+non-eta-bounded variants -- which, as we report, is the bound choice
+that breaks Architecture~B's equivariance.
+
+\paragraph{Multi-seed protocol.} The boost-OOD, HIGGS, Adult, and
+top-tagging eta\_invariants experiments are run with seeds $\{0, 1, 2\}$
+and reported as mean $\pm$ standard deviation. Single-seed entries in
+the tables are explicitly marked as such; in every case the multi-seed
+counterpart was either unaffordable or the cross-row gap was
+sufficiently large that error bars would not change the conclusion.
 
 \section{Reproduction commands}
 \label{app:repro}
-% TODO Week 6. The exact shell pipeline from paper/runs/week1.sh,
-% with notes on data download (HIGGS, Top Tagging) and expected wall times.
+
+The complete pipeline below regenerates every number in the paper from
+the public source. All commands are run from the repository root and
+write per-seed JSON records to \texttt{results/}; the
+\texttt{benchmarks.aggregate} module then reduces them to the tables
+shown.
+
+\paragraph{Data preparation.} HIGGS is auto-downloaded from the UCI
+mirror by \texttt{benchmarks.run\_higgs} on first invocation; Adult is
+fetched via \texttt{openml}. The top-tagging files require one
+Hugging Face download:
+\begin{verbatim}
+pip install huggingface_hub pandas pyarrow tables
+python -m benchmarks.download_top_tagging --cache-dir data
+\end{verbatim}
+
+\paragraph{Headline experiments (multi-seed).}
+\begin{verbatim}
+# Boost-OOD: Table 1, 3 seeds.
+for s in 0 1 2; do python -m benchmarks.run_boost_ood --seed $s; done
+
+# HIGGS: Table 2, 3 seeds.
+for s in 0 1 2; do python -m benchmarks.run_higgs --seed $s; done
+
+# Adult: Table 3, 3 seeds.
+for s in 0 1 2; do python -m benchmarks.run_neutral --seed $s; done
+
+# Top tagging constituents: Table 4 (eta_invariants 3 seeds).
+for s in 0 1 2; do \
+    python -m benchmarks.run_top_tagging --representation constituents \
+        --models eta_invariants --max-samples 100000 --epochs 30 --seed $s; \
+done
+
+# Top tagging apples-to-apples baselines (single seed each).
+python -m benchmarks.run_top_tagging --representation constituents \
+    --models relu_bottleneck,so33_signature_only --max-samples 100000 \
+    --epochs 30 --seed 0
+\end{verbatim}
+
+\paragraph{Equivariance probe (Section~\ref{sec:exp-equiv} table and
+Figure~\ref{fig:eq-vs-norm}).}
+\begin{verbatim}
+python -m benchmarks.figure_equivariance
+\end{verbatim}
+
+\paragraph{Diagnostic for the trained Architecture~B model.}
+\begin{verbatim}
+python -m benchmarks.diagnose_equivariant --seed 0
+\end{verbatim}
+
+\paragraph{Aggregating the tables.}
+\begin{verbatim}
+python -m benchmarks.aggregate
+\end{verbatim}
+
+\paragraph{Approximate wall times.} On a single modern x86 CPU,
+single-seed boost-OOD takes $\sim 8$ minutes per seed across all
+architectures; HIGGS matched-bottleneck is $\sim 25$ minutes per seed
+(natural-width MLPs $\sim 1$ minute, \texttt{so33\_multi} $\sim 90$
+minutes); Adult is $\sim 25$ minutes per seed; top-tagging
+\texttt{eta\_invariants} is $\sim 1$ minute per seed (no ODE), and the
+matched-bottleneck baselines are $\sim 30$ seconds and
+$\sim 25$ minutes respectively. The full multi-seed pipeline takes
+roughly $3$--$4$ CPU-hours.
 
 \end{document}
