@@ -94,11 +94,13 @@ structurally invariant \texttt{eta\_invariants} on the headline task.
         (Sections~\ref{sec:method-eta}, \ref{sec:method-equiv}).
   \item Controlled boost-OOD evaluation
         (Section~\ref{sec:exp-ood}) showing structural invariance
-        yields perfect generalization where MLPs fail.
+        yields perfect generalization where unconstrained MLPs degrade.
   \item A direct measurement of empirical equivariance of the activation
         (Section~\ref{sec:exp-equiv}).
-  \item An honest negative result and open question for the equivariant
-        architecture (Section~\ref{sec:discussion}).
+  \item A diagnosis of why the equivariant architecture loses
+        out-of-distribution generalization -- a non-invariant input
+        bound -- and an $\eta$-invariant bound that fixes it at the
+        source (Sections~\ref{sec:exp-ood},~\ref{sec:discussion}).
 \end{itemize}
 
 %==============================================================================
@@ -107,40 +109,163 @@ structurally invariant \texttt{eta\_invariants} on the headline task.
 
 \subsection{The algebra \texorpdfstring{$\mathfrak{so}(3,3)$}{so(3,3)} and its basis}
 \label{sec:method-algebra}
-% TODO Week 3: 0.5 page.
-% - Signature (-,-,-,+,+,+) and the bilinear form $\eta$.
-% - 15-dim basis: 3 rotations in each of two 3-spaces + 9 mixed boosts.
-% - Why $\mathrm{SO}(3,3)$ rather than $\mathrm{SO}(1,3)$: parameter count,
-%   richer noncompact directions, no physical commitment to a single time axis.
+
+We work in the pseudo-Euclidean space $\mathbb{R}^{3,3}$ equipped with the
+split-signature metric
+\begin{equation}
+  \eta = \mathrm{diag}(+1,+1,+1,-1,-1,-1),
+  \qquad
+  \langle x, y\rangle_\eta = x^\top \eta\, y .
+\end{equation}
+The group $\mathrm{SO}(3,3)$ consists of the linear maps preserving this
+form, $g^\top \eta\, g = \eta$, and its Lie algebra is
+\begin{equation}
+  \mathfrak{so}(3,3) = \{\, A \in \mathbb{R}^{6\times 6} :
+    A^\top \eta + \eta A = 0 \,\},
+  \qquad \dim \mathfrak{so}(3,3) = 15 .
+\end{equation}
+We use the canonical basis indexed by ordered pairs $(i,j)$ with
+$0 \le i < j \le 5$. Each generator is
+\begin{equation}
+  A^{(ij)}_{\mu\nu} =
+    \delta_{\mu i}\delta_{\nu j}
+    - \frac{\eta_{ii}}{\eta_{jj}}\,\delta_{\mu j}\delta_{\nu i},
+  \label{eq:generator}
+\end{equation}
+which satisfies the antisymmetry condition $A^\top\eta + \eta A = 0$ by
+construction. Of the $15$ generators, the $6$ that act within a single
+signature block ($\{0,1,2\}$ or $\{3,4,5\}$, i.e.\ $\eta_{ii}=\eta_{jj}$)
+are compact rotations; the remaining $9$ mix the two blocks and are the
+non-compact boost-like generators responsible for the hyperbolic
+trajectories central to the out-of-distribution behaviour we study.
+Restricting to the $6$ compact generators yields the
+$\mathfrak{so}(3)\oplus\mathfrak{so}(3)$ Euclidean ablation we denote
+\texttt{signature\_only}.
+
+We choose $\mathrm{SO}(3,3)$ rather than the physical Lorentz group
+$\mathrm{SO}(1,3)$ for three reasons: (i) the symmetric split signature
+admits a deterministic, parameter-free embedding of a Minkowski
+4-momentum (Section~\ref{sec:method-eta}) without privileging a single
+time axis; (ii) the $15$-dimensional algebra provides a richer space of
+non-compact directions for the connection to exploit; and (iii) it keeps
+the construction agnostic to the number of timelike components, which we
+found convenient for the tabular settings where no physical time axis
+exists.
 
 \subsection{Geodesic ODE activation}
 \label{sec:method-act}
-% TODO Week 3: 0.75 page.
-% - Definition: $\sigma_\theta(x) = \phi(1; x)$ where
-%   $\dot\phi(t) = \Gamma_\theta(\phi(t)) \phi(t)$, $\phi(0) = x$.
-% - $\Gamma_\theta: \mathbb{R}^6 \to \mathfrak{so}(3,3)$ is a small MLP whose
-%   output is a linear combination of the 15 generators.
-% - ODE solved with rk4 (fixed step) via torchdiffeq; bound_input flag for
-%   stability under large $|x|$.
-% - Approximate equivariance: if $\Gamma$ depends only on invariants of $x$,
-%   then $\sigma$ commutes with the group action; in practice $\Gamma$ is
-%   trained freely, giving the approximate guarantee measured in
-%   Section~\ref{sec:exp-equiv}.
+
+The core primitive is a non-linear activation $\sigma_\theta:
+\mathbb{R}^6 \to \mathbb{R}^6$ defined as the time-$T$ flow of a
+state-dependent quadratic vector field. We lift a learnable coefficient
+vector $c \in \mathbb{R}^{15}$ to a connection tensor
+\begin{equation}
+  \omega(c) \;=\; \sum_{k=1}^{15} c_k\, B^{(k)} \;\in\; \mathbb{R}^{6\times6\times6},
+  \qquad
+  B^{(k=(i,j))}_{\mu\nu\lambda} = A^{(ij)}_{\mu\nu}\,\delta_{\lambda j},
+  \label{eq:connection}
+\end{equation}
+where $B^{(k)}$ is the indicator lift of the generator
+\eqref{eq:generator}. The lift inherits the metric-connection property
+$\eta_{\mu\mu}\,\omega_{\mu\nu\lambda} + \eta_{\nu\nu}\,\omega_{\nu\mu\lambda}=0$.
+The activation is the solution of the autonomous initial value problem
+\begin{equation}
+  \frac{\mathrm{d}v^\mu}{\mathrm{d}t}
+    = -\sum_{\nu,\lambda}
+      \tilde\omega^{\mu}{}_{\nu\lambda}\, v^\nu v^\lambda,
+  \qquad v(0) = \beta(x),
+  \qquad
+  \sigma_\theta(x) = v(T),
+  \label{eq:ode}
+\end{equation}
+integrated over $t \in [0,T]$. Crucially, the only trainable parameters
+are the $15$ scalars $c$; the connection does \emph{not} depend on the
+input, so $\sigma_\theta$ is a fixed quadratic flow rather than a
+hypernetwork. We integrate \eqref{eq:ode} with a fixed-step fourth-order
+Runge--Kutta scheme ($T=0.3$, step $T/10$); the fixed step avoids the
+$\mathrm{d}t$-underflow that an adaptive solver suffers when the
+indefinite-metric trajectory steepens.
+
+\paragraph{Stability.} Under the split signature the field
+\eqref{eq:ode} can diverge exponentially. We apply three mitigations:
+small initialization $c \sim \mathcal{N}(0, 0.01^2)$; an adaptive scale
+$\tilde\omega = \omega / (1 + \lVert\omega\rVert_F)$ that bounds the
+effective connection; and an optional input bound $\beta(\cdot)$
+discussed below. We also expose a Frobenius penalty
+$\lambda \lVert\omega\rVert_F^2$ for the training loss.
+
+\paragraph{Equivariance and the input bound.}
+At $c = 0$ the flow is the identity, which is exactly $\mathrm{SO}(3,3)$
+equivariant; for small $\lVert\omega\rVert$ the activation is
+approximately equivariant, with a relative error we measure directly in
+Section~\ref{sec:exp-equiv}. The input bound $\beta$ is decisive for
+whether this equivariance survives. Three choices:
+\begin{align}
+  \beta_{\text{none}}(x) &= x, &
+  \beta_{\text{euc}}(x) &= \frac{x}{1 + \lVert x\rVert_2}, &
+  \beta_{\eta}(x) &= \frac{x}{1 + \sqrt{\,|\langle x,x\rangle_\eta|\,}} .
+  \label{eq:bounds}
+\end{align}
+The Euclidean bound $\beta_{\text{euc}}$ keeps $\lVert v\rVert$ bounded
+and was the original stabilizer, but $\lVert x\rVert_2$ is \emph{not}
+$\mathrm{SO}(3,3)$-invariant: a boost of rapidity $\phi$ scales it by
+roughly $\cosh\phi$, so $\beta_{\text{euc}}$ silently breaks
+equivariance, with consequences we trace in
+Sections~\ref{sec:exp-ood} and~\ref{sec:discussion}. The $\eta$-bound
+$\beta_\eta$ divides by the invariant $\langle x,x\rangle_\eta$ and
+therefore preserves equivariance exactly while still bounding the input.
 
 \subsection{Architecture A: \texttt{eta\_invariants}}
 \label{sec:method-eta}
-% TODO Week 3: 0.25 page.
-% - Linear lift to $\mathbb{R}^6$, then $k$ geodesic activations,
-%   then readout of $\eta$-norms only (3 negative-, 3 positive-signature).
-% - Strictly invariant: the readout sees no group-covariant information.
+
+The most conservative architecture reads out only $\mathrm{SO}(3,3)$
+invariants and applies no geodesic activation at all. Each input particle
+$p \in \mathbb{R}^4$ (a Minkowski 4-momentum $(E,p_x,p_y,p_z)$) is lifted
+into $\mathbb{R}^{3,3}$ by the deterministic, parameter-free map
+\begin{equation}
+  L(E, p_x, p_y, p_z) = (p_x, p_y, p_z, E, 0, 0),
+  \label{eq:lift}
+\end{equation}
+which places the spatial momentum in the three positive-signature axes
+and the energy in one negative-signature axis. Because $L$ is a fixed
+coordinate placement, an $\mathrm{SO}(1,3)$ Lorentz action on $(E,p)$
+corresponds to an $\mathrm{SO}(3,3)$ action on the lifted vector. For a
+set of $K$ constituents with lifted vectors $\{p_i\}$ and a validity mask,
+the readout pools only the invariant scalars: the per-particle
+$\eta$-norms $m_i^2 = \langle p_i, p_i\rangle_\eta$ and the pairwise
+$\eta$-inner-products $s_{ij} = \langle p_i, p_j\rangle_\eta$. These are
+reduced to seven permutation-invariant statistics (means and second
+moments of $m_i^2$ and $s_{ij}$, the maximum $|s_{ij}|$, and the
+invariant of the total momentum) and classified by a small MLP. Every
+quantity the classifier sees is invariant by construction, so the model
+commutes with any $\mathrm{SO}(3,3)$ transformation exactly, with no
+approximation. The pairwise term $s_{ij}$ is what lets this architecture
+capture multi-prong jet substructure (Section~\ref{sec:exp-tt}).
 
 \subsection{Architecture B: \texttt{so33\_equivariant}}
 \label{sec:method-equiv}
-% TODO Week 3: 0.25 page.
-% - Same lift + activations but readout is invariant pooling over equivariant
-%   features (norms, inner products, etc.) -- mirrors LorentzNet readout.
-% - Differs from \texttt{eta\_invariants} by retaining more covariant signal
-%   through the network depth.
+
+Architecture B inserts the geodesic activation between the equivariant
+lift and an invariant readout, testing whether the learned flow adds
+discriminative power over the raw invariants of Architecture~A. Each
+lifted constituent $p_i = L(\cdot)$ is passed through $C$ parallel
+geodesic activations (channels), each with its own connection
+$c^{(c)}$; channel $c$ produces $h_i^{(c)} = \sigma_{\theta^{(c)}}(p_i)$.
+The readout then forms, per channel, the invariants
+$\langle h_i^{(c)}, h_i^{(c)}\rangle_\eta$ and the invariant of the
+channel's masked total $\sum_i h_i^{(c)}$, pooled over the set, and feeds
+the concatenation to a small MLP head. The readout is invariant
+\emph{provided} the activation is equivariant: if
+$\sigma(g\,p_i) = g\,\sigma(p_i)$ then
+$\langle \sigma(g p_i), \sigma(g p_i)\rangle_\eta
+ = \langle \sigma(p_i), \sigma(p_i)\rangle_\eta$ because $g$ preserves
+$\eta$. This conditional is exactly where the input bound
+\eqref{eq:bounds} matters: with $\beta_{\text{euc}}$ the precondition
+fails and the model loses out-of-distribution generalization, while
+$\beta_\eta$ restores it (Section~\ref{sec:exp-ood}). Unlike
+Architecture~A, the default readout omits the pairwise term $s_{ij}$,
+a design choice whose cost we quantify on top tagging
+(Section~\ref{sec:exp-tt}).
 
 %==============================================================================
 \section{Experiments}

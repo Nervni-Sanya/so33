@@ -47,7 +47,11 @@ replacing the `\documentclass` line and the small preamble block marked
       / 0.750 signature-only on the identical split (apples-to-apples
       gap confirmed). Arch B fails (0.504) due to a readout without
       pairwise eta-products. See `notes/top_tagging_finding.md`.
-- [ ] Week 3: write `\section{Method}`.
+- [x] Week 3: `\section{Method}` written (3.1 algebra+basis, 3.2 geodesic
+      ODE activation incl. the three input bounds, 3.3 eta_invariants,
+      3.4 so33_equivariant). Corrected the connection to fixed learnable
+      scalars (not a hypernetwork). LaTeX structurally validated
+      (env/brace/math balance); not yet compiled (no local TeX).
 - [ ] Week 4: write `\section{Experiments}` + figures.
 - [ ] Week 5: write `\section{Introduction}`, `\section{Related work}`,
       `\section{Discussion}`.
