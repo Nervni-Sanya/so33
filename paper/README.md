@@ -60,6 +60,9 @@ replacing the `\documentclass` line and the small preamble block marked
       `benchmarks/figure_equivariance.py` into `paper/figures/`.
       Figure 2 (OOD AUC vs rapidity) deferred -- the boost-OOD table
       already carries the story; can add in week 6 polish if needed.
-- [ ] Week 5: write `\section{Introduction}`, `\section{Related work}`,
-      `\section{Discussion}`.
-- [ ] Week 6: polish + arXiv upload.
+- [x] Week 5: Introduction, Related Work, Discussion, Conclusion written.
+      All 7 \citep keys resolve to refs.bib (no dangling refs). The
+      Discussion uses the correct diagnosis (non-invariant bound, not
+      the earlier "Gamma drift" hypothesis).
+- [ ] Week 6: polish (compile locally, verify refs render, fill
+      Appendix hyperparameters + reproduction commands), arXiv upload.

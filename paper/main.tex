@@ -68,21 +68,52 @@ on the headline task.
 \section{Introduction}
 \label{sec:intro}
 
-% TODO Week 5: write 1 page.
-% Key points to cover, in order:
-%   1. Lorentz invariance in collider physics; why OOD-to-boost is a
-%      real failure mode for ML at colliders.
-%   2. Two standard responses: (a) hand-craft invariant features (jet mass,
-%      $p_T$); (b) build equivariant architectures (LGN, LorentzNet, PELICAN).
-%   3. Both responses fix the group action analytically. We ask: what if the
-%      connection were learned? Concretely, can a per-input geodesic on
-%      $\mathrm{SO}(3,3)$ approximate equivariance well enough to help, while
-%      still admitting a structural-invariant variant?
-%   4. Contributions: (i) geodesic ODE activation construction;
-%      (ii) two architectures (structural vs. equivariant); (iii) controlled
-%      OOD evaluation showing structural variant generalizes perfectly,
-%      equivariant variant does not; (iv) honest report on HIGGS/Adult.
-%   5. State explicitly: we do not claim SOTA on top tagging.
+Lorentz symmetry is exact in the physics that generates collider data: a
+particle's identity does not change under a boost of the laboratory
+frame. Yet a machine-learning model trained on jets at one range of
+boosts has no built-in reason to behave consistently at another, and
+this shows up as a concrete failure mode -- degraded accuracy when the
+test distribution of rapidities differs from training. Two standard
+responses address it. The first hand-crafts boost-invariant features
+(jet mass, transverse momentum) and feeds them to a generic
+classifier; the invariance is exact but the feature set is fixed in
+advance. The second builds Lorentz-equivariant architectures
+\citep{bogatskiy2020lgn, gong2022lorentznet, bogatskiy2022pelican} that
+propagate covariant quantities through the network and read out
+invariants at the end; here the equivariance is also exact, but it is
+imposed by fixing the group action analytically throughout the model.
+
+Both responses share an assumption: the group action is specified, not
+learned. We ask a complementary question -- what happens if the
+transformation applied inside the network is itself a learnable flow on
+a Lorentz-like algebra? Concretely, we define an activation as the
+time-$T$ solution of a geodesic-like ordinary differential equation
+whose vector field is a learnable connection on $\mathfrak{so}(3,3)$,
+the algebra of the split-signature group $\mathrm{SO}(3,3)$. The
+activation is equivariant in the limit of a vanishing connection and
+approximately equivariant nearby; learning the connection trades a small
+amount of exactness for the ability to shape the flow to the data.
+
+We study this primitive through two architectures that differ only in
+how much covariant information survives to the readout. The first,
+\texttt{eta\_invariants}, reads out $\mathrm{SO}(3,3)$-invariants
+directly and is exactly invariant by construction. The second,
+\texttt{so33\_equivariant}, applies the geodesic activation between an
+equivariant lift and an invariant readout, so its end-to-end invariance
+depends on the activation's equivariance holding in practice. This
+dependence turns out to be the crux: a numerical stabilizer added for
+unrelated reasons -- an input bound based on the Euclidean norm -- is
+not $\mathrm{SO}(3,3)$-invariant and quietly destroys the
+generalization the architecture was designed to have. We diagnose this
+precisely and fix it with an $\eta$-invariant bound.
+
+We do not aim for state-of-the-art on top tagging; dedicated
+Lorentz-equivariant taggers are far ahead on the canonical benchmark,
+and we say so explicitly (Section~\ref{sec:exp-tt}). Our contribution is
+methodological: a learnable-connection alternative to fixed group
+actions, a controlled demonstration of where structural invariance
+helps and where it does not, and a clean diagnosis-and-fix for a failure
+mode that is easy to introduce and hard to spot.
 
 \paragraph{Contributions.}
 \begin{itemize}
@@ -563,41 +594,127 @@ pairwise $\eta$-products and matched-bottleneck baselines that do not.
 %==============================================================================
 \section{Related work}
 \label{sec:related}
-% TODO Week 5. See paper/notes/related_work.md for the full annotated
-% bibliography and the positioning argument.
-% Must cover, with one-paragraph treatment each:
-%   - LGN \citep{bogatskiy2020lgn}
-%   - LorentzNet \citep{gong2022lorentznet}
-%   - PELICAN \citep{bogatskiy2022pelican}
-%   - EGNN \citep{satorras2021egnn} (broader equivariant background)
-%   - Cohen \& Welling \citep{cohen2016gconv} (foundational)
-%   - Neural ODE \citep{chen2018neuralode} (ODE-as-layer)
-% Positioning: prior Lorentz-equivariant work uses analytic group actions; we
-% replace the action with a learned connection on a related but distinct
-% algebra. Explicitly state that LorentzNet and PELICAN outperform our work
-% on real-world top-tagging benchmarks -- our contribution is methodological.
+\paragraph{Lorentz-equivariant networks.}
+The Lorentz Group Network \citep{bogatskiy2020lgn} introduced exact
+$\mathrm{SO}(1,3)$ equivariance for particle physics by acting with
+finite-dimensional group representations and is the closest conceptual
+precedent for our work. LorentzNet \citep{gong2022lorentznet} simplifies
+this to message passing on Minkowski four-momenta with invariant edge
+features and reaches accuracy competitive with the best non-equivariant
+top taggers; PELICAN \citep{bogatskiy2022pelican} adds permutation
+equivariance with Lorentz invariance or covariance and is strong across
+jet tagging and reconstruction. All three fix the group action
+analytically and propagate it through the network. We instead
+parameterize a connection and integrate it as a geodesic flow, accepting
+approximate equivariance in exchange for a learnable inductive bias, and
+we work on the higher-rank split-signature algebra $\mathfrak{so}(3,3)$
+rather than the physical $\mathfrak{so}(1,3)$. On the real top-tagging
+benchmark these dedicated architectures are well ahead of our models
+(Section~\ref{sec:exp-tt}); our aim is the mechanism, not the
+leaderboard.
+
+\paragraph{Equivariance by construction.}
+The broader program of building symmetry into architectures rather than
+learning it from augmentation begins with group-equivariant
+convolutions \citep{cohen2016gconv} and includes $E(n)$-equivariant
+graph networks \citep{satorras2021egnn}, which classify from invariant
+inter-point distances. Our \texttt{eta\_invariants} architecture is in
+this family: it reads out $\eta$-invariants of a parameter-free lift,
+with the distinctive feature that the pairwise term it pools is the
+indefinite-metric inner product $\langle p_i, p_j\rangle_\eta$ rather
+than a Euclidean distance. EMLP \citep{finzi2021emlp} provides a general
+recipe for equivariant linear maps on arbitrary matrix groups, including
+the pseudo-orthogonal groups $\mathrm{O}(p,q)$; it is the closest
+precedent for the linear part of our construction. Where EMLP builds
+equivariant linear layers from the algebra, we build a non-linear
+activation as a geodesic flow on the same kind of algebra, a
+complementary direction.
+
+\paragraph{Neural ODEs.}
+Treating a layer as the solution of a learned ODE
+\citep{chen2018neuralode} is the computational template for our
+activation. Our specialization is that the vector field is constrained
+to the structure-preserving connection of $\mathfrak{so}(3,3)$, so the
+flow respects the indefinite metric by construction rather than being a
+generic learned field.
 
 %==============================================================================
 \section{Discussion and limitations}
 \label{sec:discussion}
-% TODO Week 5. 0.75 page.
-% Honest content:
-%   - The structural-invariant variant works as predicted; the equivariant
-%     variant does not. Why?
-%   - Hypothesis: $\Gamma$ drifts away from invariant-only inputs during
-%     training, breaking the approximate-equivariance precondition.
-%   - Diagnostic to be cited from week-2 results
-%     (paper/notes/equivariant_diagnosis.md).
-%   - Single-seed history; multi-seed numbers presented here.
-%   - We do not improve over MLPs on full-width HIGGS; the contribution is
-%     the OOD-generalization mechanism, not raw accuracy.
-%   - Open question: can $\Gamma$ be regularized to remain
-%     invariant-feature-only without destroying expressivity?
+\paragraph{When structural invariance helps.}
+The clearest result is also the simplest: on the boost-OOD task, the
+architectures whose readout is genuinely $\mathrm{SO}(3,3)$-invariant
+generalize perfectly across a $4\times$ rapidity extension, while
+partially-invariant baselines degrade smoothly. The invariant readout
+is not a heuristic regularizer here; it removes the only axis along
+which the train and OOD distributions differ. The same mechanism
+explains the top-tagging result, where the pairwise $\eta$-inner-product
+term captures multi-prong substructure that per-particle readouts
+cannot.
+
+\paragraph{A failure mode that is easy to introduce.}
+The most instructive finding is negative in origin and positive in
+resolution. Architecture~B was designed to be invariant, yet it failed
+on exactly the task it was built for. The cause was not the geodesic
+flow, the lift, or the readout, but an input bound added for numerical
+stability: dividing by $1 + \lVert x\rVert_2$ uses the Euclidean norm,
+which is not $\mathrm{SO}(3,3)$-invariant, so the bounded input -- and
+hence every downstream ``invariant'' -- carries a rapidity-dependent
+factor. After training, the connection coefficients collapse toward
+zero, leaving the bound as the sole source of non-equivariance; the
+readout feature's invariance error is then $\sim 10^{-1}$ rather than
+machine precision (Section~\ref{sec:exp-equiv}). Replacing the Euclidean
+norm with the $\eta$-norm $\sqrt{|\langle x, x\rangle_\eta|}$ -- an
+invariant of the same dimension -- restores exact invariance of the
+readout feature and recovers OOD AUC to $1.000$. We highlight this
+because the bug is subtle: it is a one-line stabilizer that compiles,
+trains, and produces a model that looks equivariant under casual
+inspection, while silently defeating the architecture's purpose.
+
+\paragraph{Limitations.}
+We do not improve over well-tuned MLPs on full-width HIGGS; the
+contribution there is the matched-bottleneck ablation showing learning
+the connection helps, not a raw-accuracy claim. On top tagging we
+report on an internal split and do not match dedicated Lorentz
+taggers on the canonical benchmark. Architecture~B reaches only chance
+accuracy on top tagging because its readout omits the pairwise term,
+and on that input distribution the $\eta$-bound and the no-bound
+variants coincide (the constituents have small $\eta$-norm, so the
+bound divisor is $\approx 1$), so top tagging does not test the bound
+distinction the way the synthetic task does. The boost-OOD task is
+synthetic by design; demonstrating the same mechanism on a physical
+boost-OOD setting -- for example, transferring a tagger across
+collision energies -- would strengthen the claim and is the natural
+next step.
+
+\paragraph{Open questions.}
+Two directions follow directly. First, enriching Architecture~B's
+readout with the pairwise $\eta$-inner products that make
+Architecture~A effective, combined with the $\eta$-bounded activation,
+would test whether the learned flow can add value on top of the raw
+invariants on a real task. Second, the $\eta$-bound is stable in the
+operating regime we reach but still diverges at large connection norms
+(Section~\ref{sec:exp-equiv}); an invariant bound that remains stable
+across the full range -- or an explicit invariant penalty during
+training -- would make the equivariant architecture robust by
+construction rather than by staying in a benign regime.
 
 %==============================================================================
 \section{Conclusion}
 \label{sec:conclusion}
-% TODO Week 6. 3-4 sentences.
+
+We introduced a geodesic activation on $\mathfrak{so}(3,3)$ -- a
+learnable connection integrated as an ODE flow -- and studied it through
+a structurally invariant architecture and an equivariant one. On a
+controlled boost-OOD task the invariant readouts generalize perfectly
+across a large rapidity shift, and a parameter-efficient variant wins on
+Adult, while full-width MLPs remain ahead on HIGGS. The central lesson
+is the diagnosis: an equivariant architecture can be silently broken by
+a non-invariant numerical stabilizer, and replacing the Euclidean input
+bound with an $\eta$-invariant one fixes the failure at its source.
+Demonstrating the same mechanism on a physical boost-transfer task, and
+combining the $\eta$-bounded flow with a pairwise-invariant readout, are
+the natural next steps.
 
 \bibliographystyle{plainnat}
 \bibliography{refs}
