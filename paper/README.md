@@ -41,8 +41,12 @@ replacing the `\documentclass` line and the small preamble block marked
 - [x] Week 2: `so33_equivariant` diagnosis -- bound_input identified as
       cause; `so33_equivariant_unbounded` and the principled
       `so33_equivariant_eta_bounded` both recover OOD 1.000 +/- 0.000
-      (3 seeds). See `notes/diagnosis_findings.md`. Pending: top-tagging
-      constituents stability confirmation for the eta-bound.
+      (3 seeds). See `notes/diagnosis_findings.md`.
+- [x] Bonus: real-data top-tagging finding -- eta_invariants reaches
+      AUC 0.944 +/- 0.0005 on 100k constituents (3 seeds). Arch B fails
+      (0.504) due to a readout without pairwise eta-products. See
+      `notes/top_tagging_finding.md`. Pending: same-split baseline
+      re-run for a defensible gap claim; canonical-split caveat.
 - [ ] Week 3: write `\section{Method}`.
 - [ ] Week 4: write `\section{Experiments}` + figures.
 - [ ] Week 5: write `\section{Introduction}`, `\section{Related work}`,

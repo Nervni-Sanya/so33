@@ -109,6 +109,24 @@ Notes for the paper:
   story. The win lives at the *natural-width vs natural-width* comparison,
   not matched-parameter.
 
+## Top tagging constituents (100k, K=32, normalize=global, 30 epochs)
+
+| model          | params | test_acc        | test_auc          |
+|----------------|--------|-----------------|-------------------|
+| eta_invariants | 4802   | 0.896 +/- 0.001 | **0.944 +/- 0.0005** |
+
+(3 seeds; see top_tagging_finding.md.) Old non-invariant baselines on
+the same path were ~0.749 (relu) / 0.738 (so33_signature_only), but
+those predate a split refactor -- MUST re-run on the exact current
+loader before quoting the gap. so33_equivariant variants got 0.504
+(chance) due to a readout lacking pairwise eta-products.
+
+CRITICAL caveat: this is a 70/15/15 internal split of 100k jets, NOT
+the canonical Kasieczka test split. Do NOT compare to LorentzNet /
+PELICAN published numbers -- they are far ahead on the real benchmark.
+See top_tagging_finding.md for the honest framing and the apples-to-
+apples baseline run still to do.
+
 ## What this changes in the plan
 
 - Abstract has been updated to reflect honest headline numbers
