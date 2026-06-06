@@ -51,17 +51,17 @@ attains AUC $0.944 \pm 0.0005$ (3 seeds), far above non-invariant
 matched-bottleneck baselines on the identical split ($0.759$ relu,
 $0.750$ signature-only); we report this on a 100k-jet internal split
 and do not claim parity with dedicated Lorentz-equivariant taggers on
-the canonical benchmark. We measure the
-empirical equivariance of the activation directly (relative error
-$1.3\times10^{-3}$) and identify a mechanism by which the default
+the canonical benchmark. We identify a mechanism by which the default
 \texttt{so33\_equivariant} architecture loses generalization despite
 its structurally invariant readout: the Euclidean-norm input bound,
 introduced for ODE stability, is not SO(3,3)-invariant and propagates
 into the readout feature as a non-invariant denominator. Replacing it
-with an $\eta$-invariant bound $1+\sqrt{|x^\top\eta x|}$ -- which keeps
-the indefinite-metric ODE stable while preserving equivariance at
-machine precision -- restores OOD AUC to $1.000$, matching the
-structurally invariant \texttt{eta\_invariants} on the headline task.
+with an $\eta$-invariant bound $1+\sqrt{|x^\top\eta x|}$ -- which preserves
+the readout-feature invariance at machine precision
+($1.4\times 10^{-15}$ vs $1.4\times 10^{-1}$ for the Euclidean bound)
+while keeping the indefinite-metric ODE stable in the operating
+regime -- restores OOD AUC to $1.000$, matching the structurally invariant \texttt{eta\_invariants}
+on the headline task.
 \end{abstract}
 
 %==============================================================================
@@ -273,40 +273,292 @@ a design choice whose cost we quantify on top tagging
 
 \subsection{Empirical equivariance}
 \label{sec:exp-equiv}
-% TODO Week 4: 0.25 page + Figure 1.
-% - Sample $x$ from training distribution and $g \in \mathrm{SO}(3,3)$.
-% - Compute $\| \sigma(g x) - g \sigma(x) \| / \| \sigma(x) \|$.
-% - Report number ($1.3\times10^{-3}$) at training-time $\|\Gamma\|$.
-% - Figure 1: relative equivariance error vs $\|\Gamma\|$.
+
+We measure two quantities directly on the activation $\sigma$: the
+activation-level relative error
+\begin{equation}
+  \varepsilon_\sigma(g, x)
+   = \frac{\lVert \sigma(g x) - g\,\sigma(x)\rVert_2}{\lVert \sigma(x)\rVert_2},
+\end{equation}
+and the readout-feature absolute error
+\begin{equation}
+  \varepsilon_m(g, x)
+   = \bigl|\,\langle \sigma(x), \sigma(x)\rangle_\eta
+            - \langle \sigma(gx), \sigma(gx)\rangle_\eta\,\bigr|,
+\end{equation}
+averaged over a batch of $256$ random inputs and $16$ group elements
+$g \sim \mathrm{SO}(3,3)$ at rapidity scale $0.6$. The first quantity is
+what a hypernetwork view would track; the second is what Architecture~B
+actually feeds to its classifier head. The diagnostic of
+Section~\ref{sec:exp-ood} shows that, after training on the boost-OOD
+task, the connection coefficients collapse to
+$\lVert c\rVert_2 \approx 0$, so the activation is effectively the
+identity composed with the input bound $\beta$ -- and the bound itself
+is the only remaining source of non-equivariance. At this operating
+point the three bounds give:
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+input bound & $\overline{\varepsilon_\sigma}$ & $\overline{\varepsilon_m}$ \\
+\midrule
+$\beta_{\text{none}}$       & $0.0$              & $3.4\times 10^{-14}$ \\
+$\beta_{\text{euclidean}}$  & $7.2\times 10^{-1}$ & $1.4\times 10^{-1}$ \\
+$\beta_\eta$                & $8.6\times 10^{-15}$ & $1.4\times 10^{-15}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The $\eta$-bound preserves both quantities at machine precision; the
+Euclidean bound is broken by thirteen orders of magnitude on the
+readout feature. At finite coefficient norm
+$\lVert c\rVert_2 = 0.03$ (a typical early-training scale), the
+$\eta$-bound feature error grows to $6.6\times 10^{-13}$ -- still
+$\sim 12$ orders of magnitude below the Euclidean bound's locked
+$1.4\times 10^{-1}$. The Euclidean bound's error is essentially
+constant in $\lVert c\rVert_2$ across the entire training range,
+because the violation comes from the bound itself, not from the
+connection.
+
+Figure~\ref{fig:eq-vs-norm} shows the same comparison swept over
+$\lVert c\rVert_2 \in \{0, 0.01, 0.03, 0.1, 0.3\}$. At
+$\lVert c\rVert_2 = 1$ both $\beta_{\text{none}}$ and $\beta_\eta$
+return NaN -- the indefinite-metric ODE diverges -- while the
+Euclidean bound remains stable. This makes precise the original
+stability motivation for $\beta_{\text{euc}}$: at large connection
+norms it is the only stable option, at the cost of breaking
+equivariance. Within the operating regime that training actually
+reaches ($\lVert c\rVert_2 \lesssim 0.1$), the $\eta$-bound is both
+stable and equivariant.
+
+We also probed the trained Architecture~B model from
+Section~\ref{sec:exp-ood}, separately on in-distribution and OOD
+rapidity inputs. The default (Euclidean-bounded) activation has
+$\overline{\varepsilon_\sigma}=0.77$ on ID inputs and $0.72$ on OOD,
+showing the violation is uniform across the input distribution rather
+than concentrated OOD; what changes is the distribution of the
+\emph{readout feature} $\langle h_i, h_i\rangle_\eta$, whose
+non-invariant denominator shifts with input rapidity and breaks the
+classification boundary. Replacing $\beta_{\text{euc}}$ with $\beta_\eta$
+removes the denominator entirely, which is the mechanism by which the
+$\eta$-bound recovers OOD generalization in Section~\ref{sec:exp-ood}.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.7\linewidth]{figures/equivariance_vs_norm.pdf}
+  \caption{Readout-feature equivariance error
+    $\overline{\varepsilon_m}$ versus connection-coefficient norm
+    $\lVert c\rVert_2$, for the three input bounds. Markers at each
+    $\lVert c\rVert_2 = \{0, 0.01, 0.03, 0.1, 0.3, 1, 3\}$.}
+  \label{fig:eq-vs-norm}
+\end{figure}
 
 \subsection{Synthetic boost-OOD}
 \label{sec:exp-ood}
-% TODO Week 4: headline. 0.75 page + Table 1 + Figure 2.
-% - Task: binary classification of 6D physics-like points; train on rapidity
-%   $\eta_{train} = 0.6$, test on $\eta_{ood} = 2.5$.
-% - Table 1: id_auc / ood_auc / gap (mean $\pm$ std over 3 seeds) for
-%   {relu_mlp, relu_bottleneck, so33, so33_multi, so33_signature_only,
-%    so33_equivariant, eta_invariants}.
-% - Figure 2: OOD AUC vs rapidity ($0.6 \to 2.5$) curve per architecture.
+
+We classify $6$-dimensional points sampled from a boost-invariant
+distribution: two classes are distinguished by an SO(3,3)-invariant of
+their lifted coordinates, and every sample is scrambled by a random
+SO(3,3) boost. Training and in-distribution test draws use rapidity
+$\phi \in [0, 0.6]$; the out-of-distribution test draws use
+$\phi \in [0.6, 2.5]$, a $\sim4\times$ extension into the unseen
+high-boost regime. Discriminating the invariant label requires not
+learning the training-time boost manifold; we report the in-distribution
+(ID) and out-of-distribution (OOD) AUC and their gap, with mean and
+standard deviation over $3$ seeds.
+
+\begin{table}[t]
+  \centering
+  \caption{Boost-OOD results. Train rapidity $\phi \in [0, 0.6]$,
+    OOD test $\phi \in [0.6, 2.5]$, $n_\text{train}=8500$. Mean
+    $\pm$ standard deviation over three seeds.}
+  \label{tab:boost-ood}
+  \begin{tabular}{lrccc}
+    \toprule
+    model & params & id AUC & ood AUC & gap \\
+    \midrule
+    \texttt{eta\_invariants}                 & 4802 & $1.000\pm 0.000$ & $\mathbf{1.000\pm 0.000}$ & $+0.000$ \\
+    \texttt{so33\_equivariant\_unbounded}    & 542  & $1.000\pm 0.000$ & $\mathbf{1.000\pm 0.000}$ & $+0.000$ \\
+    \texttt{so33\_equivariant\_eta\_bounded} & 542  & $1.000\pm 0.000$ & $\mathbf{1.000\pm 0.000}$ & $+0.000$ \\
+    \midrule
+    \texttt{relu\_mlp}                       & 2306 & $1.000\pm 0.000$ & $0.944\pm 0.004$ & $+0.056$ \\
+    \texttt{so33\_multi}                     & 278  & $1.000\pm 0.000$ & $0.888\pm 0.004$ & $+0.112$ \\
+    \texttt{so33}                            & 71   & $1.000\pm 0.000$ & $0.880\pm 0.005$ & $+0.120$ \\
+    \texttt{so33\_signature\_only}           & 62   & $1.000\pm 0.000$ & $0.880\pm 0.006$ & $+0.120$ \\
+    \texttt{relu\_bottleneck}                & 56   & $1.000\pm 0.000$ & $0.876\pm 0.004$ & $+0.124$ \\
+    \midrule
+    \texttt{so33\_equivariant} (default, $\beta_{\text{euc}}$)
+                                             & 542  & $0.999\pm 0.001$ & $0.663\pm 0.001$ & $+0.336$ \\
+    \texttt{so33\_equivariant\_frozen}       & 482  & $0.999$          & $0.662$          & $+0.337$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Table~\ref{tab:boost-ood} groups the rows into three blocks. The first
+contains the three architectures that achieve perfect OOD generalization
+($\mathrm{AUC}=1.000\pm 0.000$ across seeds): the structurally invariant
+Architecture~A and the two Architecture~B variants whose input bound is
+$\mathrm{SO}(3,3)$-invariant ($\beta_{\text{none}}$ and $\beta_\eta$).
+The second block reports the partially-invariant baselines and SO33
+matched-bottleneck variants, which degrade smoothly from
+$\mathrm{AUC}=1.000$ in-distribution to $0.88$--$0.94$ OOD; the relu MLP,
+despite being non-equivariant, achieves the best OOD AUC of this block
+($0.944\pm 0.004$) at the cost of $40\times$ more parameters than the
+matched-bottleneck SO33. The third block reports the diagnostic
+failure: Architecture~B with the default Euclidean input bound drops to
+$\mathrm{AUC}=0.663\pm 0.001$, reproducible across seeds and across the
+\texttt{frozen} ablation that disables learning the connection
+entirely. The failure is therefore not noise and not a training-dynamics
+artifact; the cause is the non-invariant input bound, as detailed in
+Section~\ref{sec:exp-equiv} and discussed in
+Section~\ref{sec:discussion}.
 
 \subsection{HIGGS}
 \label{sec:exp-higgs}
-% TODO Week 4: 0.5 page + Table 2.
-% - Matched bottleneck (hidden=6) and natural-width settings.
-% - Honest reading: at matched parameters, so33 $\approx$ small MLP within
-%   noise; at natural width, MLP wins.
 
-\subsection{Adult: parameter-efficiency}
+We use the standard HIGGS classification task ($28$ standardised
+features, $200{,}000$ samples, $70/15/15$ split). Two settings: matched
+bottleneck (hidden width $6$, isolating the activation) and natural
+width (hidden width $256$, the engineering comparison).
+
+\begin{table}[t]
+  \centering
+  \caption{HIGGS test AUC, $3$ seeds. Matched-bottleneck row $\mathit{tanh}$ is
+    the strongest activation at the bottlenecked width; the SO33-based
+    \texttt{so33} marginally exceeds \emph{relu} and \emph{gelu}
+    bottlenecks at $\sim 1\sigma$. The natural-width MLPs win overall,
+    and the SO33 multichannel variant does not close the full-width
+    gap.}
+  \label{tab:higgs}
+  \begin{tabular}{lrc}
+    \toprule
+    model & params & test AUC \\
+    \midrule
+    \multicolumn{3}{l}{\textit{matched bottleneck (hidden $=6$)}} \\
+    \texttt{tanh\_bottleneck}     & 188 & $\mathbf{0.770\pm 0.002}$ \\
+    \texttt{so33}                 & 203 & $0.763\pm 0.002$ \\
+    \texttt{so33\_signature\_only}& 194 & $0.761\pm 0.001$ \\
+    \texttt{gelu\_bottleneck}     & 188 & $0.756\pm 0.008$ \\
+    \texttt{relu\_bottleneck}     & 188 & $0.755\pm 0.008$ \\
+    \texttt{so33\_frozen}         & 188 & $0.737\pm 0.007$ \\
+    \midrule
+    \multicolumn{3}{l}{\textit{natural width (hidden $=256$)}} \\
+    \texttt{relu\_mlp}            & 7938 & $\mathbf{0.805\pm 0.001}$ \\
+    \texttt{tanh\_mlp}            & 7938 & $0.804\pm 0.001$ \\
+    \texttt{gelu\_mlp}            & 7938 & $0.803\pm 0.001$ \\
+    \texttt{so33\_multi}          & 806  & $0.783\pm 0.003$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Two readings follow from Table~\ref{tab:higgs}. First, the matched
+bottleneck comparison places SO33 marginally above the relu and gelu
+baselines (significance $\approx 1\sigma$), and below the tanh
+baseline, indicating the geodesic flow adds a small but positive
+contribution at this width but is not categorically better than a
+well-tuned pointwise activation. Second, the \texttt{so33\_frozen}
+ablation -- identical to \texttt{so33} but with the connection
+coefficients held at initialization -- loses $\sim 0.026$ AUC
+($\approx 3\sigma$), confirming that the gain on this dataset comes
+from learning the connection, not from the algebraic structure alone.
+At natural width, the relu/tanh/gelu MLPs outperform
+\texttt{so33\_multi} by $0.022$ AUC; we do not present this as a
+parameter-efficiency win on HIGGS (the gap is too large to attribute to
+$10\times$ fewer parameters alone).
+
+\subsection{Adult}
 \label{sec:exp-adult}
-% TODO Week 4: 0.25 page + Table 3.
-% - Matched bottleneck: so33\_multi reaches $\approx$ small MLP test acc with
-%   roughly $1/3$ of the parameters.
 
-\subsection{Top tagging: metric-preserving normalization}
+We use the Adult income classification task ($14$ features expanded to
+$105$ after one-hot encoding, $48{,}842$ rows, $70/15/15$ split). At the
+matched-bottleneck width all activations cluster within $0.005$ test
+AUC of each other (Appendix~\ref{app:hp}); the result of interest lives
+at the natural-width comparison.
+
+\begin{table}[t]
+  \centering
+  \caption{Adult test AUC, natural-width setting, $3$ seeds.
+    \texttt{so33\_multi} exceeds the best MLP by $+0.007$ AUC
+    ($\approx 3\sigma$) at roughly $10\times$ fewer parameters.}
+  \label{tab:adult}
+  \begin{tabular}{lrc}
+    \toprule
+    model & params & test AUC \\
+    \midrule
+    \texttt{so33\_multi}          & 2654  & $\mathbf{0.912\pm 0.002}$ \\
+    \texttt{tanh\_mlp}            & 27650 & $0.905\pm 0.001$ \\
+    \texttt{gelu\_mlp}            & 27650 & $0.900\pm 0.001$ \\
+    \texttt{relu\_mlp}            & 27650 & $0.899\pm 0.000$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Table~\ref{tab:adult} shows a parameter-efficiency win: at one-tenth
+the parameter budget of the natural-width MLPs, \texttt{so33\_multi}
+attains a higher test AUC than any of them, with $\sim 3\sigma$
+separation from the best MLP. We do not view this as a sweeping claim
+about geometric priors -- HIGGS, on the same comparison, goes the
+other way -- but as a positive data point that the SO(3,3)-flow
+activation provides useful structure on a particular real-data tabular
+task where a non-equivariant MLP requires much more capacity to reach
+the same accuracy.
+
+\subsection{Top tagging constituents}
 \label{sec:exp-tt}
-% TODO Week 4: 0.25 page.
-% - Per-constituent Deep Sets with so33 vs relu pointwise.
-% - Effect of \texttt{normalize=global} vs \texttt{per\_component} on AUC.
+
+We use the Kasieczka top-tagging benchmark in the per-constituent
+representation: each jet is a set of up to $32$ leading four-momenta,
+with global RMS normalization that preserves the Lorentz invariant
+$E^2 - \lVert p\rVert^2$ up to a global scale. We train on $70{,}000$
+jets, validate on $15{,}000$, and test on $15{,}000$, $30$ epochs.
+
+\begin{table}[t]
+  \centering
+  \caption{Top-tagging test AUC on a $100$k-jet subset (internal
+    $70/15/15$ split). \texttt{eta\_invariants} is reported across $3$
+    seeds; the baselines and Architecture~B are single-seed (the gap
+    is far larger than any plausible seed variance). The
+    \texttt{so33\_equivariant} variants are at chance because their
+    readout omits the pairwise $\eta$-inner-product term.}
+  \label{tab:topt}
+  \begin{tabular}{lrcc}
+    \toprule
+    model & params & test acc & test AUC \\
+    \midrule
+    \texttt{eta\_invariants}                  & 4802 & $0.896\pm 0.001$ & $\mathbf{0.944\pm 0.0005}$ \\
+    \midrule
+    \texttt{relu\_bottleneck}                 & 44   & $0.707$ & $0.759$ \\
+    \texttt{so33\_signature\_only}            & 50   & $0.691$ & $0.750$ \\
+    \midrule
+    \texttt{so33\_equivariant\_unbounded}     & 542  & $0.504$ & $\sim 0.5$ \\
+    \texttt{so33\_equivariant\_eta\_bounded}  & 542  & $0.504$ & $\sim 0.5$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Table~\ref{tab:topt} shows the strongest real-data effect in this
+paper: Architecture~A reaches AUC $0.944\pm 0.0005$, $+0.185$ above the
+matched-bottleneck \texttt{relu} baseline on the identical split. The
+gap is far larger than any seed variance and is consistent with the
+mechanistic prediction of Section~\ref{sec:method-eta}: a top jet's
+three-prong substructure is captured by the pairwise $\eta$-inner
+product term $s_{ij}$ that only Architecture~A includes. The two
+Architecture~B variants -- whose readout omits $s_{ij}$ -- reach only
+chance accuracy; their inability to discriminate is independent of the
+input bound, because the lifted constituents have small $\eta$-norm
+($m^2/E^2 \sim 10^{-2}$ after normalization), making both
+$\beta_{\text{none}}$ and $\beta_\eta$ approximately the identity on
+this input distribution and reducing both variants to the same
+impoverished readout.
+
+\paragraph{Comparison to published top-tagging results.}
+The number reported here is on a $100{,}000$-jet subset with an
+internal $70/15/15$ split, not on the canonical Kasieczka test split.
+Dedicated Lorentz-equivariant taggers (LGN~\citep{bogatskiy2020lgn},
+LorentzNet~\citep{gong2022lorentznet},
+PELICAN~\citep{bogatskiy2022pelican}) operate at substantially higher
+accuracy on the full benchmark and we do not claim parity with them.
+The contribution of this section is the comparison \emph{within the
+same internal split} between an invariant readout that includes
+pairwise $\eta$-products and matched-bottleneck baselines that do not.
 
 %==============================================================================
 \section{Related work}

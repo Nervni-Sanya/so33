@@ -52,7 +52,14 @@ replacing the `\documentclass` line and the small preamble block marked
       3.4 so33_equivariant). Corrected the connection to fixed learnable
       scalars (not a hypernetwork). LaTeX structurally validated
       (env/brace/math balance); not yet compiled (no local TeX).
-- [ ] Week 4: write `\section{Experiments}` + figures.
+- [x] Week 4: `\section{Experiments}` written (4.1 empirical
+      equivariance with the clean ||c||=0 / sweep numbers, 4.2 boost-OOD
+      table, 4.3 HIGGS matched+natural-width tables, 4.4 Adult
+      parameter-efficiency, 4.5 top-tagging with the honest canonical-
+      split caveat). Figure 1 (equivariance vs ||c||) generated via
+      `benchmarks/figure_equivariance.py` into `paper/figures/`.
+      Figure 2 (OOD AUC vs rapidity) deferred -- the boost-OOD table
+      already carries the story; can add in week 6 polish if needed.
 - [ ] Week 5: write `\section{Introduction}`, `\section{Related work}`,
       `\section{Discussion}`.
 - [ ] Week 6: polish + arXiv upload.
