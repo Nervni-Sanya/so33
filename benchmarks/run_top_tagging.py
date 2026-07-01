@@ -60,6 +60,16 @@ def main(argv: list[str] | None = None) -> int:
                         "'per_component' z-scores each component (destroys it).")
     p.add_argument("--pool", choices=["mean", "sum"], default="mean",
                    help="Deep Sets pooling over constituents.")
+    p.add_argument("--canonical-splits", action="store_true",
+                   help="Use the published Kasieczka train/val/test split "
+                        "(reads top_tagging_{train,val,test}.npz separately) "
+                        "instead of a random 70/15/15 re-split. Makes the "
+                        "test AUC directly comparable to published numbers. "
+                        "constituents mode only.")
+    p.add_argument("--max-train-samples", type=int, default=None,
+                   help="Cap the number of canonical-train jets (memory/time); "
+                        "val and test are always loaded in full. Only used "
+                        "with --canonical-splits.")
     args = p.parse_args(argv)
 
     if args.quick:
@@ -74,9 +84,12 @@ def main(argv: list[str] | None = None) -> int:
             cache_dir=args.cache_dir, max_samples=args.max_samples,
             n_constituents=args.n_constituents, seed=args.seed, standardise=True,
             normalize=args.normalize,
+            use_canonical_splits=args.canonical_splits,
+            max_train_samples=args.max_train_samples,
         )
         epochs = args.epochs
-        experiment = "top_tagging_constituents"
+        experiment = ("top_tagging_canonical" if args.canonical_splits
+                      else "top_tagging_constituents")
         rep = "constituents"
     else:
         split = load_top_tagging(cache_dir=args.cache_dir,

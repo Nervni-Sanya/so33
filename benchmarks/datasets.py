@@ -230,7 +230,11 @@ def aggregate_jet_to_6d(constituents: np.ndarray) -> np.ndarray:
     return np.array([px, py, pz, E, m, pT], dtype=np.float32)
 
 
-def _iter_top_tagging_jets(cache: pathlib.Path, max_samples: int | None):
+def _iter_top_tagging_jets(
+    cache: pathlib.Path,
+    max_samples: int | None,
+    split: str | None = None,
+):
     """Yield (constituents (n_particles, 4), label) for each jet in cache.
 
     Reads preconverted ``top_tagging_*.npz`` first; falls back to parsing
@@ -238,15 +242,40 @@ def _iter_top_tagging_jets(cache: pathlib.Path, max_samples: int | None):
     aggregated (``load_top_tagging``) and per-constituent
     (``load_top_tagging_constituents``) loaders so the file handling
     lives in one place.
-    """
-    npz_files = sorted(cache.glob("top_tagging_*.npz"))
-    raw_files: list[pathlib.Path] = []
-    if not npz_files:
-        for ext in ("*.parquet", "*.h5"):
-            raw_files.extend(sorted(cache.glob(ext)))
 
-    if not npz_files and not raw_files:
-        raise FileNotFoundError(
+    ``split`` selects the canonical Kasieczka split by filename. When
+    ``None`` (default) *every* matching file is read and concatenated
+    (the historical behaviour, meant to be re-split randomly downstream).
+    When set to ``"train"``/``"val"``/``"test"``, only the file for that
+    split is read: ``top_tagging_<split>.npz`` (or ``<split>.parquet`` /
+    ``<split>.h5``), so the loader can honour the published split instead
+    of shuffling it away.
+    """
+    if split is not None:
+        if split not in ("train", "val", "test"):
+            raise ValueError(
+                f"split must be one of 'train'/'val'/'test' or None; "
+                f"got {split!r}"
+            )
+        npz_files = sorted(cache.glob(f"top_tagging_{split}.npz"))
+        raw_files: list[pathlib.Path] = []
+        if not npz_files:
+            for ext in (f"{split}.parquet", f"{split}.h5"):
+                raw_files.extend(sorted(cache.glob(ext)))
+        missing_hint = (
+            f"No top_tagging_{split}.npz / {split}.parquet / {split}.h5 in "
+            f"{cache}. Canonical-split evaluation needs the per-split files; "
+            f"fetch them with:\n"
+            f"  python -m benchmarks.download_top_tagging --cache-dir {cache}\n"
+            f"(this writes top_tagging_train/val/test.npz)."
+        )
+    else:
+        npz_files = sorted(cache.glob("top_tagging_*.npz"))
+        raw_files = []
+        if not npz_files:
+            for ext in ("*.parquet", "*.h5"):
+                raw_files.extend(sorted(cache.glob(ext)))
+        missing_hint = (
             f"No top_tagging_*.npz, *.parquet, or *.h5 in {cache}. "
             f"Easiest path: fetch the Hugging Face mirror in one step:\n"
             f"  pip install huggingface_hub pandas pyarrow tables\n"
@@ -255,6 +284,9 @@ def _iter_top_tagging_jets(cache: pathlib.Path, max_samples: int | None):
             f"https://huggingface.co/datasets/dl4phys/top_tagging/tree/main "
             f"into {cache}; this loader will detect them automatically."
         )
+
+    if not npz_files and not raw_files:
+        raise FileNotFoundError(missing_hint)
 
     seen = 0
     if npz_files:
@@ -358,6 +390,27 @@ def select_leading_constituents(constituents: np.ndarray, k: int) -> np.ndarray:
     return out
 
 
+def _stack_constituent_jets(
+    cache: pathlib.Path,
+    max_samples: int | None,
+    n_constituents: int,
+    split: str | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Read jets (optionally for one canonical split) into (X, y, mask).
+
+    X is (n, K, 4) leading-k 4-momenta, y is (n,) binary labels, mask is
+    (n, K) with 1.0 for real constituents and 0.0 for padding.
+    """
+    Xs, ys = [], []
+    for cs, label in _iter_top_tagging_jets(cache, max_samples, split=split):
+        Xs.append(select_leading_constituents(cs, n_constituents))
+        ys.append(label)
+    X = torch.from_numpy(np.stack(Xs))               # (n, K, 4)
+    y = torch.tensor(ys, dtype=torch.long)
+    mask = (X.abs().sum(dim=-1) > 0).to(X.dtype)      # (n, K), 1 real / 0 pad
+    return X, y, mask
+
+
 def load_top_tagging_constituents(
     cache_dir: pathlib.Path | str,
     max_samples: int | None = 100_000,
@@ -365,6 +418,8 @@ def load_top_tagging_constituents(
     seed: int = 0,
     standardise: bool = True,
     normalize: str = "global",
+    use_canonical_splits: bool = False,
+    max_train_samples: int | None = None,
 ) -> DatasetSplit:
     """Load Top Tagging as per-constituent 4-momenta for a Deep Sets model.
 
@@ -394,19 +449,40 @@ def load_top_tagging_constituents(
                           bound_input on the model side).
     Statistics use train-split *real* constituents only; padding rows are
     forced back to exact zero afterwards.
+
+    ``use_canonical_splits`` switches from the historical random 70/15/15
+    re-split to the *published* Kasieczka train/val/test split, read from
+    the per-split files ``top_tagging_{train,val,test}.npz``. This is what
+    makes a test-set AUC directly comparable to published numbers
+    (LorentzNet, PELICAN, LGN). In that mode ``max_train_samples`` caps the
+    training jets (memory/time), while val and test are loaded in full so
+    the reported test metric is on the complete canonical test set.
     """
     cache = pathlib.Path(cache_dir)
-    Xs, ys = [], []
-    for cs, label in _iter_top_tagging_jets(cache, max_samples):
-        Xs.append(select_leading_constituents(cs, n_constituents))
-        ys.append(label)
 
-    X = torch.from_numpy(np.stack(Xs))           # (n, K, 4)
-    y = torch.tensor(ys, dtype=torch.long)
-    mask = (X.abs().sum(dim=-1) > 0).to(X.dtype)  # (n, K), 1 real / 0 pad
-
-    Xtr, ytr, Xva, yva, Xte, yte = _split_train_val_test(X, y, seed=seed)
-    mtr, _, mva, _, mte, _ = _split_train_val_test(mask, y, seed=seed)
+    if use_canonical_splits:
+        # Honour the published split: load each file separately, no reshuffle.
+        Xtr, ytr, mtr = _stack_constituent_jets(
+            cache, max_train_samples, n_constituents, split="train")
+        Xva, yva, mva = _stack_constituent_jets(
+            cache, None, n_constituents, split="val")
+        Xte, yte, mte = _stack_constituent_jets(
+            cache, None, n_constituents, split="test")
+        # Guard: a broken load (e.g. one-class file) should fail loudly, not
+        # silently train to the majority-class baseline.
+        for nm, yy in (("train", ytr), ("val", yva), ("test", yte)):
+            if yy.numel() == 0 or yy.min().item() == yy.max().item():
+                raise ValueError(
+                    f"Canonical {nm} split has constant/empty labels "
+                    f"({torch.unique(yy).tolist()}); check the "
+                    f"top_tagging_{nm}.npz file."
+                )
+        split_tag = "canonical"
+    else:
+        X, y, mask = _stack_constituent_jets(cache, max_samples, n_constituents)
+        Xtr, ytr, Xva, yva, Xte, yte = _split_train_val_test(X, y, seed=seed)
+        mtr, _, mva, _, mte, _ = _split_train_val_test(mask, y, seed=seed)
+        split_tag = "internal"
 
     if standardise and normalize != "none":
         real_tr = Xtr[mtr.bool()]                 # (n_real, 4)
@@ -434,7 +510,8 @@ def load_top_tagging_constituents(
         X_train=_pack(Xtr, mtr), y_train=ytr,
         X_val=_pack(Xva, mva),   y_val=yva,
         X_test=_pack(Xte, mte),  y_test=yte,
-        name=f"top_tagging_constituents(k={n_constituents},norm={normalize})",
+        name=(f"top_tagging_constituents(k={n_constituents},"
+              f"norm={normalize},split={split_tag})"),
         n_features=4,
         n_classes=2,
     )

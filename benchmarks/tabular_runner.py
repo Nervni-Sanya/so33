@@ -39,7 +39,16 @@ def evaluate_test(
     y_test: torch.Tensor,
     n_classes: int,
 ) -> dict[str, float]:
-    """Return test accuracy and binary AUC (when applicable)."""
+    """Return test accuracy, binary AUC, and background rejection.
+
+    For binary tasks we also report background rejection ``1/eps_B`` at
+    signal efficiencies ``eps_S in {0.3, 0.5}``. Background rejection at
+    fixed signal efficiency is the field-standard headline metric for
+    jet tagging (LorentzNet, PELICAN, LGN all report ``1/eps_B`` at
+    ``eps_S = 0.3``), so reporting it makes our top-tagging numbers
+    directly comparable to the published literature. It is a no-op extra
+    for non-tagging tabular tasks (still cheap to compute).
+    """
     model.eval()
     with torch.no_grad():
         logits = model(X_test)
@@ -49,9 +58,18 @@ def evaluate_test(
     out: dict[str, float] = {"test_acc": acc}
     if n_classes == 2:
         try:
-            from sklearn.metrics import roc_auc_score
+            from sklearn.metrics import roc_auc_score, roc_curve
+            y_true = y_test.cpu().numpy()
             scores = torch.softmax(logits, dim=-1)[:, 1].cpu().numpy()
-            out["test_auc"] = float(roc_auc_score(y_test.cpu().numpy(), scores))
+            out["test_auc"] = float(roc_auc_score(y_true, scores))
+            # Background rejection 1/eps_B at fixed signal efficiency eps_S.
+            fpr, tpr, _ = roc_curve(y_true, scores)   # tpr ascending
+            for eff, key in ((0.3, "bg_rej_30"), (0.5, "bg_rej_50")):
+                # First operating point that reaches the target signal
+                # efficiency; its false-positive rate is eps_B.
+                idx = int((tpr >= eff).argmax())
+                eps_b = float(fpr[idx])
+                out[key] = float("inf") if eps_b <= 0.0 else 1.0 / eps_b
         except Exception:
             pass
     return out
@@ -159,8 +177,10 @@ def run_tabular_experiment(
         summary.append(line)
 
         auc_s = f" auc={line['test_auc']:.3f}" if line["test_auc"] is not None else ""
+        rej = test_res.get("bg_rej_30")
+        rej_s = f" 1/eB@0.3={rej:.0f}" if rej is not None else ""
         print(f"   val_acc={line['val_acc']:.3f}  test_acc={line['test_acc']:.3f}"
-              f"{auc_s}  ({line['walltime']:.1f}s)")
+              f"{auc_s}{rej_s}  ({line['walltime']:.1f}s)")
 
     _print_summary(experiment, summary)
     return summary
