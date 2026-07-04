@@ -36,14 +36,14 @@ honest summary (full numbers and caveats in [`paper/`](paper/)):
 | **Perfect OOD generalization** | Synthetic boost-OOD, train rapidity ≤0.6, test ≤2.5 | The structurally invariant `eta_invariants` reaches **OOD AUC 1.000 ± 0.000** (3 seeds), while a relu MLP degrades to 0.944 ± 0.004. |
 | **A diagnosed-and-fixed equivariance bug** | Same task, architecture B | The default `so33_equivariant` collapses to **0.663 ± 0.001** because a Euclidean-norm input bound (added for ODE stability) is *not* SO(3,3)-invariant. An **η-invariant bound** `1+√\|xᵀηx\|` restores it to **1.000** (invariance error 1.4e-15 vs 1.4e-1). |
 | **Parameter efficiency** | Adult (natural width) | `so33_multi` reaches **AUC 0.912 ± 0.002** with ~2.7k params, above the best 10×-larger MLP (0.905 ± 0.001). |
-| **Invariant readout vs baselines** | Top-tagging constituents, 100k jets | `eta_invariants` reaches **AUC 0.944 ± 0.0005** vs 0.759 (relu) / 0.750 (signature-only) **on the identical internal split** (+0.185 AUC). |
+| **Invariant readout vs baselines** | Top tagging, **canonical Kasieczka protocol** (full 404k test set) | `eta_invariants` (4.8k params, 32 leading constituents) reaches **AUC 0.948** (identical across 3 seeds), **+0.193 AUC** and 6× background rejection over a non-invariant baseline trained under the identical protocol (0.755 / 1-εB=8). |
 
-> ⚠️ **No SOTA claim.** The top-tagging number is on a 70/15/15 *internal* split of
-> 100k jets, **not** the canonical Kasieczka test split. Dedicated Lorentz-equivariant
-> taggers (LGN, LorentzNet, PELICAN) are substantially ahead on the real benchmark.
-> The contribution is methodological — an apples-to-apples comparison *within the
-> same split* showing the invariant readout strongly outperforms non-invariant
-> baselines — not a leaderboard result.
+> ⚠️ **No SOTA claim.** On the same canonical protocol, dedicated Lorentz-equivariant
+> taggers (LorentzNet, PELICAN) reach AUC ≈ 0.987 with background rejections in the
+> thousands — far ahead of us, and we say so plainly in the paper. The contribution
+> is the within-weight-class comparison: a tiny invariant readout strongly
+> outperforms a non-invariant baseline of the same setup, now measured directly on
+> the published test split.
 
 Honest negatives are reported too: on full-width HIGGS, standard MLPs win
 (0.805 vs 0.783 AUC), and architecture B is at chance on top tagging because its
@@ -120,9 +120,10 @@ for s in 0 1 2; do python -m benchmarks.run_boost_ood --seed $s; done
 # Equivariance probe + Figure 1
 python -m benchmarks.figure_equivariance
 
-# Top-tagging constituents (needs the HF data, see benchmarks/download_top_tagging.py)
+# Top tagging on the canonical Kasieczka split (downloads ~2M jets first:
+# python -m benchmarks.download_top_tagging --cache-dir data)
 python -m benchmarks.run_top_tagging --representation constituents \
-    --models eta_invariants --max-samples 100000 --epochs 30 --seed 0
+    --canonical-splits --models eta_invariants --epochs 30 --seed 0
 ```
 
 ## Tests

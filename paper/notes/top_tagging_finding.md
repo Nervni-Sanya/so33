@@ -108,6 +108,31 @@ Two things to do before the preprint:
    dedicated Lorentz-equivariant taggers (LorentzNet, PELICAN), which
    operate at higher accuracy on the full benchmark."
 
+### Canonical-split results (FINAL)
+
+The val split turned out to exist in the dl4phys mirror under the name
+`validation.parquet` (the alternate-names fix found it), so all three
+canonical splits are the published ones: train 1,211,000 / val 403,000
+/ test 404,000. No train carve-out was needed. Results on the FULL
+canonical test set (K=32, 30 epochs):
+
+| model           | seeds | test_acc | test_auc | 1/eB@0.3 | wall/seed |
+|-----------------|-------|----------|----------|----------|-----------|
+| eta_invariants  | 0,1,2 | 0.901    | 0.948    | 50/49/50 | ~36 min   |
+| relu_bottleneck | 0     | 0.704    | 0.755    | 8        | ~14 min   |
+
+- Canonical AUC (0.948) is slightly ABOVE the internal-split 0.944 --
+  17x more training data.
+- The +0.193 AUC / 6x rejection gap over the non-invariant baseline
+  survives on the canonical protocol. This is now a direct,
+  same-protocol comparison, quotable next to published numbers.
+- Honest positioning vs SOTA: LorentzNet/PELICAN are at AUC ~0.987 and
+  rejection ~2000+; we are far below and say so plainly in Section 4.5.
+  The paper's claim is the within-weight-class comparison, not SOTA.
+- Published-row numbers in tab:topt-canonical are from memory and
+  marked %verify in main.tex -- MUST be checked against the original
+  papers before submission.
+
 ### Apples-to-apples baseline -- DONE (gap confirmed)
 
 Ran all three on the exact same 100k split (seed 0, 30 epochs):
