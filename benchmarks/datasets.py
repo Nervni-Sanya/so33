@@ -464,8 +464,25 @@ def load_top_tagging_constituents(
         # Honour the published split: load each file separately, no reshuffle.
         Xtr, ytr, mtr = _stack_constituent_jets(
             cache, max_train_samples, n_constituents, split="train")
-        Xva, yva, mva = _stack_constituent_jets(
-            cache, None, n_constituents, split="val")
+        try:
+            Xva, yva, mva = _stack_constituent_jets(
+                cache, None, n_constituents, split="val")
+        except FileNotFoundError:
+            # Some mirrors (dl4phys/top_tagging) do not ship the validation
+            # file. Val is only used for monitoring in our training loop
+            # (no early stopping; final model = last epoch), so carving a
+            # seeded 5% slice out of the canonical train is legitimate and
+            # keeps the TEST set — the only split that matters for
+            # comparability with published numbers — untouched and full.
+            print("[canonical] no val file found; holding out 5% of the "
+                  "canonical train for validation (test remains the full "
+                  "canonical test set).")
+            g = torch.Generator().manual_seed(seed)
+            perm = torch.randperm(len(Xtr), generator=g)
+            n_val = max(1, int(0.05 * len(Xtr)))
+            va_idx, tr_idx = perm[:n_val], perm[n_val:]
+            Xva, yva, mva = Xtr[va_idx], ytr[va_idx], mtr[va_idx]
+            Xtr, ytr, mtr = Xtr[tr_idx], ytr[tr_idx], mtr[tr_idx]
         Xte, yte, mte = _stack_constituent_jets(
             cache, None, n_constituents, split="test")
         # Guard: a broken load (e.g. one-class file) should fail loudly, not

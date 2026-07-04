@@ -40,9 +40,15 @@ HF_REPO = "dl4phys/top_tagging"
 MAX_PARTICLES = 200
 SPLIT_FILES = {
     # Canonical filenames in the HF release. We try parquet first
-    # (preferred — smaller, faster) and fall back to h5.
+    # (preferred — smaller, faster) and fall back to h5. Mirrors name the
+    # validation split inconsistently ("val"/"valid"/"validation"), so the
+    # val entry carries all common variants; dl4phys/top_tagging in
+    # particular 404s on val.* — if no variant exists, the loader falls
+    # back to carving a validation slice out of the canonical train
+    # (see datasets.load_top_tagging_constituents).
     "train": ("train.parquet", "train.h5"),
-    "val":   ("val.parquet",   "val.h5"),
+    "val":   ("val.parquet", "val.h5", "valid.parquet", "valid.h5",
+              "validation.parquet", "validation.h5"),
     "test":  ("test.parquet",  "test.h5"),
 }
 
