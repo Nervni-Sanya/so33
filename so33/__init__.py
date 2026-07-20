@@ -12,11 +12,12 @@ get_connection_tensor : reconstruct omega from learnable coefficients
 from .basis import build_so33_basis, get_basis_stack, get_connection_tensor
 from .ode_func import ODEFunc
 from .activation import SO33Activation
-from .network import SO33Network
+from .network import SO33Network, BottleneckClassifier
 
 __all__ = [
     "SO33Activation",
     "SO33Network",
+    "BottleneckClassifier",
     "build_so33_basis",
     "get_basis_stack",
     "get_connection_tensor",
