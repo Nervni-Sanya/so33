@@ -1,5 +1,7 @@
 # SO33 Activation — A Geodesic ODE Layer with an SO(3,3) Inductive Bias
 
+> Branch note (feature/so3c-complexification): This branch introduces a related but distinct architecture called **SO3C** (a complexified variant). SO3C is a different architecture from SO33 in general — it is not a drop-in replacement. The README below primarily documents the SO33 activation and associated architectures; where SO3C changes behavior or interfaces, consult the branch-specific code and any branch notes in `paper/` or `benchmarks/`.
+
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0--beta.3-orange.svg)]()
@@ -33,10 +35,10 @@ honest summary (full numbers and caveats in [`paper/`](paper/)):
 
 | Result | Setting | Takeaway |
 |--------|---------|----------|
-| **Perfect OOD generalization** | Synthetic boost-OOD, train rapidity ≤0.6, test ≤2.5 | The structurally invariant `eta_invariants` reaches **OOD AUC 1.000 ± 0.000** (3 seeds), while a relu MLP degrades to 0.944 ± 0.004. |
-| **A diagnosed-and-fixed equivariance bug** | Same task, architecture B | The default `so33_equivariant` collapses to **0.663 ± 0.001** because a Euclidean-norm input bound (added for ODE stability) is *not* SO(3,3)-invariant. An **η-invariant bound** `1+√\|xᵀηx\|` restores it to **1.000** (invariance error 1.4e-15 vs 1.4e-1). |
+| **Perfect OOD generalization** | Synthetic boost-OOD, train rapidity ≤0.6, test ≤2.5 | The structurally invariant `eta_invariants` reaches **OOD AUC 1.000 ± 0.000** (3 seeds), while a relu [...]
+| **A diagnosed-and-fixed equivariance bug** | Same task, architecture B | The default `so33_equivariant` collapses to **0.663 ± 0.001** because a Euclidean-norm input bound (added for ODE stabil[...] 
 | **Parameter efficiency** | Adult (natural width) | `so33_multi` reaches **AUC 0.912 ± 0.002** with ~2.7k params, above the best 10×-larger MLP (0.905 ± 0.001). |
-| **Invariant readout vs baselines** | Top tagging, **canonical Kasieczka protocol** (full 404k test set) | `eta_invariants` (4.8k params, 32 leading constituents) reaches **AUC 0.948** (identical across 3 seeds), **+0.193 AUC** and 6× background rejection over a non-invariant baseline trained under the identical protocol (0.755 / 1-εB=8). |
+| **Invariant readout vs baselines** | Top tagging, **canonical Kasieczka protocol** (full 404k test set) | `eta_invariants` (4.8k params, 32 leading constituents) reaches **AUC 0.948** (identical[...] 
 
 > ⚠️ **No SOTA claim.** On the same canonical protocol, dedicated Lorentz-equivariant
 > taggers (LorentzNet, PELICAN) reach AUC ≈ 0.987 with background rejections in the
@@ -87,7 +89,7 @@ torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
 | `T` | `float` | `1.0` | ODE integration horizon. Smaller `T` → closer to the identity/linear regime. |
 | `method` | `str` | `"dopri5"` | ODE solver: `"dopri5"`, `"rk4"`, `"euler"`. The benchmarks use fixed-step `"rk4"`. |
 | `adjoint` | `bool` | `True` | Adjoint backprop (O(1) memory). `False` for direct autograd / debugging. |
-| `bound_input` | `bool \| str` | `False` | Input bound for ODE stability: `False`/`"none"`, `True`/`"euclidean"` (÷`1+‖x‖₂`, **not** SO(3,3)-invariant), or `"eta"` (÷`1+√\|xᵀηx\|`, **SO(3,3)-invariant**). See the finding above. |
+| `bound_input` | `bool \| str` | `False` | Input bound for ODE stability: `False`/`"none"`, `True`/`"euclidean"` (÷`1+‖x‖₂`, **not** SO(3,3)-invariant), or `"eta"` (÷`1+√\|xᵀηx\|`, *[...]*) |
 | `signature_only` | `bool` | `False` | Restrict to the 6 compact generators (so(3)⊕so(3) Euclidean ablation). |
 | `freeze_coeffs` | `bool` | `False` | Freeze the 15 connection coefficients at init (isolates *learning* the connection). |
 | `max_input_norm` | `float \| None` | `None` | Soft norm cap (rescales only outliers); used on the flat tabular paths. |
@@ -106,6 +108,10 @@ torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
   `so33_equivariant_frozen` (ablation).
 - **`so33`, `so33_multi`, `so33_signature_only`, `so33_frozen`** — Deep Sets / bottleneck
   variants used in the tabular comparisons.
+
+> Note: the SO3C complexified variant introduced on this branch differs from the SO33
+> architectures listed above in parameterization and behavior. Treat SO3C as a
+> separate architecture when running benchmarks or comparing results.
 
 ## Reproducing the experiments
 
