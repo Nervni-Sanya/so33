@@ -30,6 +30,89 @@ from so3c.activation import SO3CActivation
 from so3c.algebra import invariant_features, real_to_complex
 
 
+class SO3CBottleneck(nn.Module):
+    """Linear(in -> 6) -> SO3CActivation -> Linear(6 -> out).
+
+    The direct so3c analogue of SO33Network's matched-bottleneck wiring for
+    flat tabular data (HIGGS, Adult). Uses the closed-form "exact" flow — no
+    ODE solver, so unlike the so33 counterpart it cannot diverge on
+    heavy-tailed real-data inputs (the connection is soft-normalised and the
+    flow is a bounded group element), and needs neither input bounding nor a
+    norm cap on the flat path.
+
+    mode="dynamic": connection from the invariant-fed HermitianMetric MLP.
+    mode="static" : 6 learnable scalars — the closest analogue of so33's
+                    15-coefficient activation (matched parameter class).
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        mode: str = "dynamic",
+        T: float = 1.0,
+        hidden_metric: int = 16,
+        bound_input: str = "none",
+        dtype: torch.dtype = torch.float64,
+    ) -> None:
+        super().__init__()
+        self.dtype = dtype
+        self.l1 = nn.Linear(in_features, 6).to(dtype)
+        self.act = SO3CActivation(
+            T=T, mode=mode, method="exact",
+            bound_input=bound_input, hidden=hidden_metric, dtype=dtype,
+        )
+        self.l2 = nn.Linear(6, out_features).to(dtype)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(self.dtype)
+        return self.l2(self.act(self.l1(x)))
+
+    def regularization_loss(self) -> torch.Tensor:
+        return self.act.regularization_loss()
+
+
+class MultiChannelSO3C(nn.Module):
+    """Multi-channel so3c block: C parallel Linear(in -> 6) + SO3CActivation,
+    concatenated to 6*C, then Linear(6*C -> out). Mirror of MultiChannelSO33.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        channels: int = 4,
+        mode: str = "dynamic",
+        T: float = 1.0,
+        hidden_metric: int = 16,
+        bound_input: str = "none",
+        dtype: torch.dtype = torch.float64,
+    ) -> None:
+        super().__init__()
+        self.dtype = dtype
+        self.lifts = nn.ModuleList(
+            [nn.Linear(in_features, 6).to(dtype) for _ in range(channels)]
+        )
+        self.acts = nn.ModuleList(
+            [
+                SO3CActivation(
+                    T=T, mode=mode, method="exact",
+                    bound_input=bound_input, hidden=hidden_metric, dtype=dtype,
+                )
+                for _ in range(channels)
+            ]
+        )
+        self.head = nn.Linear(6 * channels, out_features).to(dtype)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(self.dtype)
+        feats = [act(lift(x)) for lift, act in zip(self.lifts, self.acts)]
+        return self.head(torch.cat(feats, dim=-1))
+
+    def regularization_loss(self) -> torch.Tensor:
+        return sum(act.regularization_loss() for act in self.acts)
+
+
 class SO3CInvariantsClassifier(nn.Module):
     """SO(3, C)-INVARIANT-by-construction classifier (both invariants)."""
 

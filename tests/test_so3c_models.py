@@ -82,9 +82,40 @@ def test_eta_only_blindness() -> None:
     print(f"  ✓ eta_only blind to Im(z.z) at fixed Re(z.z) ({diff:.1e})")
 
 
+def test_tabular_factory_wiring() -> None:
+    """build_model must return working flat tabular models for so3c names:
+    forward on float32 (B, 28), finite backward, regularization contract."""
+    from benchmarks.models import build_model, SO3C_MODELS
+
+    torch.manual_seed(3)
+    x = torch.randn(16, 28, dtype=torch.float32)
+    y = torch.randint(0, 2, (16,))
+    for name in SO3C_MODELS:
+        model = build_model(name, in_features=28, out_features=2)
+        logits = model(x)
+        assert logits.shape == (16, 2), f"{name}: bad output shape"
+        loss = torch.nn.functional.cross_entropy(logits, y) + model.regularization_loss()
+        loss.backward()
+        for pname, p in model.named_parameters():
+            assert p.grad is not None, f"{name}: missing grad {pname}"
+            assert torch.isfinite(p.grad).all(), f"{name}: non-finite grad {pname}"
+        n_params = sum(p.numel() for p in model.parameters())
+        print(f"  ✓ {name}: forward/backward OK ({n_params} params)")
+
+    # Constituents representation must be rejected explicitly.
+    try:
+        build_model("so3c", in_features=4, out_features=2,
+                    representation="constituents")
+    except ValueError:
+        print("  ✓ constituents representation rejected for so3c")
+    else:
+        raise AssertionError("so3c must reject representation='constituents'")
+
+
 if __name__ == "__main__":
     print("\n── so3c benchmark-model tests ──")
     test_generator_invariants()
     test_classifier_invariance()
     test_eta_only_blindness()
+    test_tabular_factory_wiring()
     print("All so3c model tests passed.\n")

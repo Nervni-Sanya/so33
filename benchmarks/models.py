@@ -61,13 +61,18 @@ MATCHED_MODELS = (
     "relu_bottleneck",
     "tanh_bottleneck",
     "gelu_bottleneck",
+    "so3c",                # complexified-SO(3) bottleneck, dynamic metric
+    "so3c_static",         # complexified-SO(3) bottleneck, 6 static coeffs
 )
 NATURAL_MODELS = (
     "relu_mlp",
     "tanh_mlp",
     "gelu_mlp",
     "so33_multi",          # multi-channel SO33: capacity comparison vs wide MLPs
+    "so3c_multi",          # multi-channel so3c: same comparison, exact flow
 )
+# so3c names support representation="flat" only (no Deep-Sets path yet).
+SO3C_MODELS = ("so3c", "so3c_static", "so3c_multi")
 SET_MODELS = (
     # Set-based equivariant classifiers — only valid for representation="constituents".
     "eta_invariants",      # SO(3,3)-invariant features (Arch A)
@@ -557,6 +562,11 @@ def build_model(
         bound_input = (representation == "constituents")
 
     if representation == "constituents":
+        if name in SO3C_MODELS:
+            raise ValueError(
+                f"{name!r} supports representation='flat' only; the so3c "
+                f"Deep-Sets path is not implemented yet."
+            )
         return _build_deepsets(
             name, in_features, out_features,
             T=T, adjoint=adjoint, dtype=dtype,
@@ -596,6 +606,25 @@ def build_model(
             in_features=in_features, out_features=out_features,
             channels=SO33_MULTI_CHANNELS, T=T, adjoint=adjoint, dtype=dtype,
             bound_input=bound_input, so33_kwargs=so33_kwargs,
+        )
+
+    # so3c variants: closed-form exact flow, so none of the solver/bounding
+    # machinery above applies — the flow is a bounded group element for any
+    # input, hence no bound_input and no max_input_norm on the flat path.
+    # T is degenerate with the learnable connection norm; the activation's
+    # native T=1.0 gives the full soft-normalised range (harness T is for
+    # the so33 ODE horizon and is not forwarded).
+    if name in ("so3c", "so3c_static"):
+        from benchmarks.so3c_models import SO3CBottleneck
+        return SO3CBottleneck(
+            in_features=in_features, out_features=out_features,
+            mode="dynamic" if name == "so3c" else "static", dtype=dtype,
+        )
+    if name == "so3c_multi":
+        from benchmarks.so3c_models import MultiChannelSO3C
+        return MultiChannelSO3C(
+            in_features=in_features, out_features=out_features,
+            channels=SO33_MULTI_CHANNELS, dtype=dtype,
         )
 
     pointwise: dict[str, Callable[[], nn.Module]] = {

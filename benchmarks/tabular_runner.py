@@ -29,7 +29,7 @@ import torch
 import torch.nn as nn
 
 from .datasets import DatasetSplit
-from .models import build_model, MATCHED_MODELS, NATURAL_MODELS, SET_MODELS
+from .models import build_model, MATCHED_MODELS, NATURAL_MODELS, SET_MODELS, SO3C_MODELS
 from .train import train_classifier, TrainConfig
 
 
@@ -114,6 +114,9 @@ def run_tabular_experiment(
     for name in models:
         if name in SET_MODELS and representation != "constituents":
             print(f"[{experiment}] SKIP {name}: requires representation=constituents")
+            continue
+        if name in SO3C_MODELS and representation != "flat":
+            print(f"[{experiment}] SKIP {name}: so3c models support representation=flat only")
             continue
         if name in SET_MODELS:
             family = "equivariant_set"
