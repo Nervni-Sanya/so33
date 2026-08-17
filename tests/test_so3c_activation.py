@@ -130,6 +130,20 @@ def test_gradients() -> None:
         print(f"  ✓ gradients flow [{mode}] (|grad| sum = {total:.3e})")
 
 
+def test_gradients_at_zero_init() -> None:
+    """Backward must be finite at the exact zero-init point (a = 0), where
+    naive complex-norm chains produce NaN (d|z|/dz undefined at 0)."""
+    torch.manual_seed(8)
+    x = torch.randn(8, 6, dtype=torch.float64)
+    act = SO3CActivation(mode="dynamic", method="exact")   # zero-init metric
+    loss = act(x).pow(2).sum()
+    loss.backward()
+    for name, p in act.named_parameters():
+        assert p.grad is not None, f"missing grad: {name}"
+        assert torch.isfinite(p.grad).all(), f"non-finite grad at init: {name}"
+    print("  ✓ gradients finite at zero-init (a = 0)")
+
+
 if __name__ == "__main__":
     print("\n── SO3CActivation tests ──")
     test_identity_at_init()
@@ -138,4 +152,5 @@ if __name__ == "__main__":
     test_invariant_bound_preserves_group_structure()
     test_complex_input_path()
     test_gradients()
+    test_gradients_at_zero_init()
     print("All SO3CActivation tests passed.\n")

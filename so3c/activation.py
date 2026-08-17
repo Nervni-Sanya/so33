@@ -155,8 +155,13 @@ class SO3CActivation(nn.Module):
         else:
             a = self.metric(v)
         if self.scale_connection:
-            norm = a.abs().pow(2).sum(dim=-1, keepdim=True).sqrt()
-            a = a / (1.0 + norm)
+            # NOTE: a.abs().sqrt()-style norms are NaN-poisoned in backward at
+            # a = 0 (the zero-init starting point of the dynamic metric):
+            # d|z|/dz is undefined at 0 and sqrt'(0) = inf. Compute the norm
+            # from squared real/imag parts with an eps under the sqrt so the
+            # gradient chain is exactly 0 (not 0 * inf) at a = 0.
+            norm_sq = (a.real.pow(2) + a.imag.pow(2)).sum(dim=-1, keepdim=True)
+            a = a / (1.0 + (norm_sq + 1e-12).sqrt())
         return a
 
     # ── Public API ────────────────────────────────────────────────────────────
