@@ -44,6 +44,10 @@ def load_results(results_dir: pathlib.Path) -> list[dict[str, Any]]:
 def group_by_experiment_model(records: list[dict]) -> dict[tuple[str, str], list[dict]]:
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in records:
+        # Skip non-model records (e.g. diagnose_equivariant dumps a
+        # diagnostic JSON into results/ without a "model" field).
+        if not isinstance(r, dict) or "experiment" not in r or "model" not in r:
+            continue
         groups[(r["experiment"], r["model"])].append(r)
     return groups
 
@@ -226,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(out)
     if args.out:
-        pathlib.Path(args.out).write_text(out)
+        pathlib.Path(args.out).write_text(out, encoding="utf-8")
     return 0
 
 
