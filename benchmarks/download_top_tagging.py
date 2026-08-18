@@ -7,12 +7,25 @@ and convert it to the npz layout that ``benchmarks.datasets.load_top_tagging``
 expects.
 
 Output layout (in --cache-dir):
-    top_tagging_train.npz   constituents (N, 200, 4),  labels (N,)
+    top_tagging_train.npz   constituents (N, K, 4),  labels (N,)
     top_tagging_val.npz
     top_tagging_test.npz
 
 Each constituent vector is (E, px, py, pz). Missing particles are zero-
 padded (the original release pads up to 200 constituents per jet).
+``--n-constituents K`` keeps only the K leading-pT constituents at
+conversion time (default 200 = keep all). K=32 shrinks the on-disk and
+in-RAM footprint ~6x and matches the benchmark's training default; the
+loader's own ``select_leading_constituents`` is idempotent on top of it
+as long as K_download >= K_train.
+
+CAVEAT: the ``--representation aggregated`` path sums ALL stored
+constituents to build the jet 4-vector, so its numbers change (slightly)
+when the download is trimmed. Use the constituents representation (the
+benchmark default for this dataset) with trimmed downloads.
+
+Parquet files are converted in chunks (pyarrow batches), so peak RAM
+stays at a few hundred MB even for the 1.2M-jet canonical train split.
 
 Usage::
 
@@ -53,14 +66,11 @@ SPLIT_FILES = {
 }
 
 
-def _load_dataframe(path: pathlib.Path):
-    """Load either parquet or h5 into a pandas DataFrame (lazy import)."""
-    import pandas as pd
-
-    # Detect Git-LFS pointer files / partial downloads up front so the
-    # user gets a useful "rerun the download script" message instead of
-    # an opaque HDF5 superblock traceback. Real splits are 100 MB+; LFS
-    # pointers are ~130 bytes, partials a few KiB.
+def _check_not_lfs_pointer(path: pathlib.Path) -> None:
+    """Detect Git-LFS pointer files / partial downloads up front so the
+    user gets a useful "rerun the download script" message instead of
+    an opaque HDF5/parquet traceback. Real splits are 100 MB+; LFS
+    pointers are ~130 bytes, partials a few KiB."""
     size = path.stat().st_size if path.exists() else 0
     if size < 4096:
         raise RuntimeError(
@@ -72,6 +82,14 @@ def _load_dataframe(path: pathlib.Path):
             f"--cache-dir {path.parent}\n"
             f"which fetches via huggingface_hub and handles LFS automatically."
         )
+
+
+def _load_dataframe(path: pathlib.Path):
+    """Load either parquet or h5 into a pandas DataFrame (lazy import)."""
+    import pandas as pd
+
+    _check_not_lfs_pointer(path)
+    size = path.stat().st_size if path.exists() else 0
 
     try:
         if path.suffix == ".parquet":
@@ -130,6 +148,48 @@ def _df_to_constituents_labels(df) -> tuple[np.ndarray, np.ndarray]:
     return constituents, labels
 
 
+def _leading_by_pt(constituents: np.ndarray, k: int) -> np.ndarray:
+    """Keep the k leading-pT constituents per jet, (N, 200, 4) -> (N, k, 4).
+
+    Vectorised form of datasets.select_leading_constituents: sort by
+    descending pT^2 = px^2 + py^2 (zero-padded slots sort last, keeping
+    their zeros), take the first k. Stable sort preserves the original
+    order among equal-pT entries, matching the loader's behaviour.
+    """
+    if k >= constituents.shape[1]:
+        return constituents
+    pt2 = constituents[:, :, 1] ** 2 + constituents[:, :, 2] ** 2
+    idx = np.argsort(-pt2, axis=1, kind="stable")[:, :k]          # (N, k)
+    return np.take_along_axis(constituents, idx[:, :, None], axis=1)
+
+
+def _convert_file(path: pathlib.Path, k: int) -> tuple[np.ndarray, np.ndarray]:
+    """Convert one split file to (constituents (N, k, 4), labels (N,)).
+
+    Parquet is streamed in pyarrow batches so peak RAM stays bounded
+    (~2 x chunk size) instead of materialising the full 800-column frame
+    (~8 GB for the canonical train split). h5 falls back to the whole-file
+    pandas path.
+    """
+    if path.suffix == ".parquet":
+        import pyarrow.parquet as pq
+
+        _check_not_lfs_pointer(path)
+        pf = pq.ParquetFile(path)
+        chunks_c: list[np.ndarray] = []
+        chunks_l: list[np.ndarray] = []
+        for batch in pf.iter_batches(batch_size=65536):
+            df = batch.to_pandas()
+            c, l = _df_to_constituents_labels(df)
+            chunks_c.append(_leading_by_pt(c, k))
+            chunks_l.append(l)
+        return np.concatenate(chunks_c), np.concatenate(chunks_l)
+
+    df = _load_dataframe(path)
+    c, l = _df_to_constituents_labels(df)
+    return _leading_by_pt(c, k), l
+
+
 def _download_one(repo: str, candidates: Iterable[str], dest: pathlib.Path) -> pathlib.Path:
     """Download the first candidate that exists in the HF repo."""
     from huggingface_hub import hf_hub_download
@@ -163,6 +223,11 @@ def main(argv: list[str] | None = None) -> int:
                    help=f"Hugging Face repo id (default: {HF_REPO}).")
     p.add_argument("--splits", type=str, default="train,val,test",
                    help="Comma-separated subset of splits to convert.")
+    p.add_argument("--n-constituents", type=int, default=MAX_PARTICLES,
+                   help="Keep only the K leading-pT constituents per jet at "
+                        "conversion time (default 200 = keep all). K=32 "
+                        "shrinks disk/RAM ~6x; see module docstring caveat "
+                        "about the aggregated representation.")
     args = p.parse_args(argv)
 
     cache = pathlib.Path(args.cache_dir)
@@ -202,14 +267,16 @@ def main(argv: list[str] | None = None) -> int:
                       file=sys.stderr)
                 continue
 
-        print(f"[{split}] converting {local_path.name} -> npz ...")
-        df = _load_dataframe(local_path)
-        constituents, labels = _df_to_constituents_labels(df)
+        print(f"[{split}] converting {local_path.name} -> npz "
+              f"(K={args.n_constituents}) ...")
+        constituents, labels = _convert_file(local_path, args.n_constituents)
         out = cache / f"top_tagging_{split}.npz"
-        np.savez_compressed(out, constituents=constituents, labels=labels)
+        np.savez_compressed(out, constituents=constituents, labels=labels,
+                            n_constituents=np.int64(constituents.shape[1]))
         n_converted += 1
+        size_mb = out.stat().st_size / 2**20
         print(f"   {out.name}  shape={constituents.shape}  "
-              f"signal={(labels == 1).sum()}/{len(labels)}")
+              f"signal={(labels == 1).sum()}/{len(labels)}  ({size_mb:.0f} MB)")
 
     if n_converted == 0:
         print("\n[error] no splits were downloaded or converted. Check the "

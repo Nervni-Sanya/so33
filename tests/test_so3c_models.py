@@ -112,10 +112,76 @@ def test_tabular_factory_wiring() -> None:
         raise AssertionError("so3c must reject representation='constituents'")
 
 
+def _random_jets(B: int, K: int, gen: torch.Generator) -> torch.Tensor:
+    """(B, K, 5) physical-ish constituent sets with a ragged mask."""
+    p = torch.randn(B, K, 3, dtype=torch.float64, generator=gen)
+    m = torch.rand(B, K, dtype=torch.float64, generator=gen) * 0.1
+    E = torch.sqrt(m * m + p.pow(2).sum(-1))
+    mask = (torch.arange(K).unsqueeze(0)
+            < torch.randint(3, K + 1, (B, 1), generator=gen)).double()
+    x = torch.cat([E.unsqueeze(-1), p, mask.unsqueeze(-1)], dim=-1)
+    return x * torch.cat([mask.unsqueeze(-1).expand(B, K, 4),
+                          torch.ones(B, K, 1, dtype=torch.float64)], dim=-1)
+
+
+def test_set_factory_wiring() -> None:
+    """_build_deepsets branches for the so3c set family: forward/backward."""
+    from benchmarks.models import build_model, SO3C_SET_MODELS
+
+    torch.manual_seed(4)
+    x = _random_jets(4, 8, torch.Generator().manual_seed(4))
+    y = torch.randint(0, 2, (4,))
+    for name in SO3C_SET_MODELS:
+        model = build_model(name, in_features=4, out_features=2,
+                            representation="constituents")
+        logits = model(x)
+        assert logits.shape == (4, 2), f"{name}: bad output shape"
+        loss = torch.nn.functional.cross_entropy(logits, y) + model.regularization_loss()
+        loss.backward()
+        assert all(torch.isfinite(p.grad).all()
+                   for p in model.parameters() if p.grad is not None), \
+            f"{name}: non-finite grads"
+        n_params = sum(p.numel() for p in model.parameters())
+        print(f"  ✓ {name}: forward/backward OK ({n_params} params)")
+
+
+def test_set_lorentz_invariance() -> None:
+    """Logits must be invariant under Lorentz transformations of the jet —
+    the defining property of the whole set family. Exact-flow models to
+    near machine precision, the ODE model to solver tolerance."""
+    from benchmarks.models import build_model
+    from so3c.lift import random_lorentz_pair
+
+    gen = torch.Generator().manual_seed(5)
+    x = _random_jets(6, 10, gen)
+    L, _ = random_lorentz_pair(rot_scale=1.0, boost_scale=0.5, generator=gen)
+    p4_t = x[..., :4] @ L.T
+    x_t = torch.cat([p4_t, x[..., 4:]], dim=-1)
+
+    tolerances = {
+        "so3c_invariant_set": 1e-9,
+        "so3c_equivariant_set": 1e-9,
+        "so3c_interaction_set": 1e-3,
+    }
+    for name, tol in tolerances.items():
+        torch.manual_seed(6)
+        model = build_model(name, in_features=4, out_features=2,
+                            representation="constituents")
+        model.eval()
+        with torch.no_grad():
+            base = model(x)
+            transformed = model(x_t)
+        err = (transformed - base).abs().max().item()
+        assert err < tol, f"{name}: logits moved under Lorentz: {err:.2e}"
+        print(f"  ✓ {name}: Lorentz-invariant logits ({err:.1e})")
+
+
 if __name__ == "__main__":
     print("\n── so3c benchmark-model tests ──")
     test_generator_invariants()
     test_classifier_invariance()
     test_eta_only_blindness()
     test_tabular_factory_wiring()
+    test_set_factory_wiring()
+    test_set_lorentz_invariance()
     print("All so3c model tests passed.\n")

@@ -80,6 +80,15 @@ SET_MODELS = (
     "so33_equivariant_frozen",       # Arch B with freeze_coeffs=True
     "so33_equivariant_unbounded",    # Arch B with bound_input=False
     "so33_equivariant_eta_bounded",  # Arch B with eta-invariant input bound
+    "so3c_invariant_set",    # bivector-lift complex invariants (so3c Arch A)
+    "so3c_equivariant_set",  # + channel lift & geodesic flow (so3c Arch B)
+    "so3c_interaction_set",  # + SO3CInteraction multi-particle ODE flow
+)
+# The so3c set family (subset of SET_MODELS, dispatched in _build_deepsets).
+SO3C_SET_MODELS = (
+    "so3c_invariant_set",
+    "so3c_equivariant_set",
+    "so3c_interaction_set",
 )
 ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS + SET_MODELS
 
@@ -497,6 +506,21 @@ def _build_deepsets(
             activation=pointwise[name](), out_features=out_features,
             in_features=in_features, hidden=hidden, dtype=dtype, pool=pool,
         )
+
+    if name in SO3C_SET_MODELS:
+        # Complexified-SO(3) set models on the bivector lift. They consume
+        # the raw (B, K, 5) constituents directly (their lift is internal),
+        # so none of the so33 kwargs (T, bound_input, solver) apply.
+        from benchmarks.so3c_models import (
+            SO3CEquivariantSetClassifier,
+            SO3CInteractionSetClassifier,
+            SO3CInvariantSetClassifier,
+        )
+        if name == "so3c_invariant_set":
+            return SO3CInvariantSetClassifier(out_features=out_features, dtype=dtype)
+        if name == "so3c_equivariant_set":
+            return SO3CEquivariantSetClassifier(out_features=out_features, dtype=dtype)
+        return SO3CInteractionSetClassifier(out_features=out_features, dtype=dtype)
 
     raise ValueError(f"Unknown model name: {name!r}. Known: {ALL_MODELS}")
 

@@ -70,8 +70,11 @@ def evaluate_test(
                 idx = int((tpr >= eff).argmax())
                 eps_b = float(fpr[idx])
                 out[key] = float("inf") if eps_b <= 0.0 else 1.0 / eps_b
-        except Exception:
-            pass
+        except Exception as e:
+            # Do NOT swallow silently: a missing test_auc in the results
+            # JSON has historically hidden real failures (NaN logits in the
+            # so33_equivariant runs went unnoticed for weeks).
+            print(f"[evaluate_test] WARNING: AUC/rejection failed: {e!r}")
     return out
 
 

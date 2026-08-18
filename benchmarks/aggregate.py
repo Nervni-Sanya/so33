@@ -122,7 +122,7 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
         records = tabular_experiments[exp]
         out_lines.append(f"## {exp}")
         out_lines.append("")
-        for family in ("matched_bottleneck", "natural_width"):
+        for family in ("matched_bottleneck", "natural_width", "equivariant_set"):
             family_recs = [r for r in records if r["family"] == family]
             if not family_recs:
                 continue
@@ -133,7 +133,11 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
             has_auc = any(r["test_metrics"].get("test_auc") is not None
                           for r in family_recs)
 
-            label = "matched bottleneck (hidden=6)" if family == "matched_bottleneck" else "natural width MLPs"
+            label = {
+                "matched_bottleneck": "matched bottleneck (hidden=6)",
+                "natural_width": "natural width MLPs",
+                "equivariant_set": "equivariant / invariant set models",
+            }[family]
             out_lines.append(f"### {label}")
             out_lines.append("")
             header_cells = ["model", "n_seeds", "params", "val_acc", "test_acc"]
