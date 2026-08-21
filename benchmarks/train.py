@@ -29,6 +29,7 @@ class TrainConfig:
     early_stop_patience: int | None = None    # epochs without val improvement
     seed: int = 0
     device: str = "cpu"
+    eval_chunk_size: int = 4096    # jets per forward pass at eval time
 
 
 @dataclass
@@ -50,6 +51,27 @@ class TrainResult:
 
 def _accuracy(logits: torch.Tensor, y: torch.Tensor) -> float:
     return (logits.argmax(dim=-1) == y).float().mean().item()
+
+
+@torch.no_grad()
+def forward_in_chunks(
+    model: nn.Module,
+    X: torch.Tensor,
+    chunk_size: int = 4096,
+) -> torch.Tensor:
+    """Run inference in fixed-size chunks and concatenate the logits.
+
+    Full-batch evaluation does not scale for set models: the pooled
+    readouts build a per-jet (K, K) pairwise matrix, so a 403k-jet
+    validation split needs 6.6 GB for one real channel and several times
+    that for a multi-channel complex model — enough to hard-crash the
+    process (SIGSEGV, no Python traceback). Chunking bounds that at
+    chunk_size jets regardless of split size, at no cost in results.
+    """
+    if len(X) <= chunk_size:
+        return model(X)
+    return torch.cat([model(X[i:i + chunk_size])
+                      for i in range(0, len(X), chunk_size)], dim=0)
 
 
 def train_classifier(
@@ -133,7 +155,7 @@ def train_classifier(
         # Validation
         model.eval()
         with torch.no_grad():
-            val_logits = model(X_val)
+            val_logits = forward_in_chunks(model, X_val, cfg.eval_chunk_size)
             val_loss   = criterion(val_logits, y_val).item()
             val_acc    = _accuracy(val_logits, y_val)
 

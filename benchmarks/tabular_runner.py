@@ -30,7 +30,7 @@ import torch.nn as nn
 
 from .datasets import DatasetSplit
 from .models import build_model, MATCHED_MODELS, NATURAL_MODELS, SET_MODELS, SO3C_MODELS
-from .train import train_classifier, TrainConfig
+from .train import train_classifier, TrainConfig, forward_in_chunks
 
 
 def evaluate_test(
@@ -51,7 +51,7 @@ def evaluate_test(
     """
     model.eval()
     with torch.no_grad():
-        logits = model(X_test)
+        logits = forward_in_chunks(model, X_test)
         pred   = logits.argmax(dim=-1)
         acc    = (pred == y_test).float().mean().item()
 
