@@ -157,6 +157,12 @@
 |---|---:|---:|---:|---:|---:|
 | relu_bottleneck | 1 | 44 | 0.705±0.000 | 0.704±0.000 | 0.755±0.000 |
 
+### equivariant / invariant set models
+
+| model | n_seeds | params | val_acc | test_acc | test_auc |
+|---|---:|---:|---:|---:|---:|
+| eta_invariants | 3 | 4802 | 0.899±0.000 | 0.901±0.000 | 0.948±0.000 |
+
 ## top_tagging_constituents
 
 ### matched bottleneck (hidden=6)
@@ -178,6 +184,16 @@
 | gelu_mlp | 1 | 1794 | 0.699±0.000 | 0.694±0.000 | 0.754±0.000 |
 | tanh_mlp | 1 | 1794 | 0.700±0.000 | 0.693±0.000 | 0.753±0.000 |
 | so33_multi | 1 | 230 | 0.693±0.000 | 0.688±0.000 | 0.749±0.000 |
+
+### equivariant / invariant set models
+
+| model | n_seeds | params | val_acc | test_acc | test_auc |
+|---|---:|---:|---:|---:|---:|
+| eta_invariants | 3 | 4802 | 0.898±0.002 | 0.896±0.000 | 0.945±0.000 |
+| so33_equivariant_eta_bounded | 2 | 542 | 0.505±0.003 | 0.503±0.002 | nan±nan |
+| so33_equivariant_unbounded | 2 | 542 | 0.505±0.003 | 0.503±0.002 | nan±nan |
+| so3c_equivariant_set | 3 | 9056 | 0.919±0.003 | 0.918±0.001 | 0.971±0.001 |
+| so3c_invariant_set | 3 | 5506 | 0.909±0.002 | 0.907±0.001 | 0.963±0.001 |
 
 ## top_tagging_quick
 
