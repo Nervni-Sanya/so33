@@ -1,0 +1,5 @@
+model,n_params,auc,bg_rej_30,source,verified
+LGN,4500,0.964,435,"Bogatskiy et al. 2020 (arXiv:2006.04780)",no
+ParticleNet,498000,0.986,1615,"Qu & Gouskos 2020 (arXiv:1902.08570)",no
+LorentzNet,220000,0.987,2195,"Gong et al. 2022 (arXiv:2201.08187)",no
+PELICAN,208000,0.987,2250,"Bogatskiy et al. 2023 (arXiv:2307.16506)",no

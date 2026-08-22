@@ -1,0 +1,9 @@
+model,n_params,n_seeds,auc,auc_std,bg_rej_30,bg_rej_30_std,origin
+relu_bottleneck,44,1,0.75536,0.00000,7.7,0.0,measured
+eta_invariants,4802,3,0.94783,0.00002,49.4,0.2,measured
+so3c_invariant_set,5506,3,0.96892,0.00005,182.7,0.2,measured
+so3c_equivariant_set,9056,3,0.97429,0.00007,315.8,7.5,measured
+LGN,4500,,0.964,,435,,quoted
+ParticleNet,498000,,0.986,,1615,,quoted
+LorentzNet,220000,,0.987,,2195,,quoted
+PELICAN,208000,,0.987,,2250,,quoted

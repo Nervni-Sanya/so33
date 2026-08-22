@@ -61,6 +61,11 @@ def evaluate_test(
             from sklearn.metrics import roc_auc_score, roc_curve
             y_true = y_test.cpu().numpy()
             scores = torch.softmax(logits, dim=-1)[:, 1].cpu().numpy()
+            # Stash the raw scores so callers can persist them: every
+            # post-hoc analysis (binned performance, ROC, rejection curves)
+            # is then free, instead of costing a full retrain per figure.
+            out["_scores"] = scores
+            out["_labels"] = y_true
             out["test_auc"] = float(roc_auc_score(y_true, scores))
             # Background rejection 1/eps_B at fixed signal efficiency eps_S.
             fpr, tpr, _ = roc_curve(y_true, scores)   # tpr ascending
@@ -165,11 +170,23 @@ def run_tabular_experiment(
                 "final_val_acc":   train_res.final_val_acc,
                 "best_val_acc":    train_res.best_val_acc,
             },
-            "test_metrics":  test_res,
+            "test_metrics":  {k: v for k, v in test_res.items()
+                              if not k.startswith("_")},
             "config":        asdict(cfg),
+            "history":       train_res.history,
         }
         out_path = out_dir / f"{experiment}__{name}__seed{seed}.json"
         out_path.write_text(json.dumps(record, indent=2))
+
+        # Per-jet test scores go beside the JSON as a compact npz (~1.6 MB
+        # for a 404k-jet canonical test split).
+        if "_scores" in test_res:
+            import numpy as np
+            np.savez_compressed(
+                out_dir / f"{experiment}__{name}__seed{seed}__scores.npz",
+                scores=test_res["_scores"].astype(np.float32),
+                labels=test_res["_labels"].astype(np.int8),
+            )
 
         line = {
             "model":     name,
