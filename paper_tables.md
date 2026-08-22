@@ -161,6 +161,8 @@
 
 | model | n_seeds | params | val_acc | test_acc | test_auc |
 |---|---:|---:|---:|---:|---:|
+| so3c_equivariant_set | 1 | 9056 | 0.922±0.000 | 0.923±0.000 | 0.974±0.000 |
+| so3c_invariant_set | 3 | 5506 | 0.915±0.000 | 0.916±0.000 | 0.969±0.000 |
 | eta_invariants | 3 | 4802 | 0.899±0.000 | 0.901±0.000 | 0.948±0.000 |
 
 ## top_tagging_constituents
