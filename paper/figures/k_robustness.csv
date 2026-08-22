@@ -1,0 +1,16 @@
+model,K,auc,auc_std,bg_rej_30,bg_rej_30_std
+eta_invariants,4,0.85227,0.00000,26.8,0.0
+eta_invariants,8,0.91458,0.00000,39.2,0.0
+eta_invariants,16,0.93673,0.00000,39.4,0.0
+eta_invariants,24,0.94296,0.00000,42.0,0.0
+eta_invariants,32,0.94444,0.00000,43.0,0.0
+so3c_equivariant_set,4,0.85734,0.00000,37.8,0.0
+so3c_equivariant_set,8,0.93496,0.00000,132.7,0.0
+so3c_equivariant_set,16,0.96431,0.00000,157.6,0.0
+so3c_equivariant_set,24,0.96918,0.00000,137.5,0.0
+so3c_equivariant_set,32,0.96967,0.00000,142.7,0.0
+so3c_invariant_set,4,0.85304,0.00000,28.0,0.0
+so3c_invariant_set,8,0.92569,0.00000,91.1,0.0
+so3c_invariant_set,16,0.95680,0.00000,132.7,0.0
+so3c_invariant_set,24,0.96215,0.00000,116.4,0.0
+so3c_invariant_set,32,0.96174,0.00000,114.6,0.0
