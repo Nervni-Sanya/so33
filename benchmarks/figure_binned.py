@@ -10,6 +10,14 @@ slice; the field-standard equivalent is binning by kinematics, which also
 shows the mechanism -- a mass-driven tagger and a substructure-driven one
 degrade in different bins.
 
+Panels: AUC vs jet pT, AUC vs jet mass, and background rejection vs jet
+mass. Constituent multiplicity is available via --variables but is NOT
+shown by default: it is censored at K (every saturated jet reports K), and
+its low bins are almost pure background (signal fraction 0.008-0.17 at
+K=32), so per-bin AUC there reflects class composition rather than
+discrimination. Jet-length dependence is measured properly by
+figure_k_robustness instead.
+
 Scores come from the ``*__scores.npz`` files written alongside each result
 JSON, so no model is retrained. The test split is reloaded with
 ``normalize="none"`` to recover physical GeV (normalisation is applied
@@ -53,16 +61,19 @@ def _jet_variables(X: np.ndarray) -> dict[str, np.ndarray]:
     }
 
 
+MIN_BIN = 50          # below this a per-bin AUC is not meaningful
+
+
 def _auc(labels: np.ndarray, scores: np.ndarray) -> float:
     from sklearn.metrics import roc_auc_score
-    if labels.min() == labels.max():
+    if labels.size < MIN_BIN or labels.min() == labels.max():
         return float("nan")
     return float(roc_auc_score(labels, scores))
 
 
 def _rejection(labels: np.ndarray, scores: np.ndarray, eff: float = 0.3) -> float:
     from sklearn.metrics import roc_curve
-    if labels.min() == labels.max():
+    if labels.size < MIN_BIN or labels.min() == labels.max():
         return float("nan")
     fpr, tpr, _ = roc_curve(labels, scores)
     idx = int((tpr >= eff).argmax())
@@ -80,6 +91,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-samples", type=int, default=100_000)
     p.add_argument("--n-constituents", type=int, default=32)
     p.add_argument("--canonical-splits", action="store_true")
+    p.add_argument("--panels", type=str, default="jet_pT:auc,jet_mass:auc,jet_mass:rej",
+                   help="Comma-separated variable:metric panels. Variables: "
+                        "jet_pT, jet_mass, multiplicity. Metrics: auc, rej.")
     p.add_argument("--out-dir", type=str, default=str(DEFAULT_OUT_DIR))
     args = p.parse_args(argv)
 
@@ -118,42 +132,69 @@ def main(argv: list[str] | None = None) -> int:
         print("[binned] no score files found", file=sys.stderr)
         return 1
 
+    panels = []
+    for spec in args.panels.split(","):
+        var, _, metric = spec.strip().partition(":")
+        if var not in variables:
+            print(f"[binned] unknown variable {var!r}", file=sys.stderr)
+            return 1
+        panels.append((var, metric or "auc"))
+
     plt = get_pyplot()
-    fig, axes = (None, None)
+    fig = axes = None
     if plt is not None:
-        fig, axes = plt.subplots(1, len(variables), figsize=(3.0 * len(variables), 3.0),
-                                 sharey=True)
+        fig, axes = plt.subplots(1, len(panels), figsize=(3.0 * len(panels), 3.0))
+        if len(panels) == 1:
+            axes = [axes]
     csv_rows = []
 
-    for ax_i, (var_name, values) in enumerate(variables.items()):
+    AXIS_LABEL = {"jet_pT": r"jet $p_T$ [GeV]", "jet_mass": "jet mass [GeV]",
+                  "multiplicity": "retained constituents (censored at $K$)"}
+    METRIC_LABEL = {"auc": "AUC within bin",
+                    "rej": r"$1/\epsilon_B$ at $\epsilon_S=0.3$ within bin"}
+
+    for ax_i, (var_name, metric) in enumerate(panels):
+        values = variables[var_name]
         # Equal-population bins so every point carries the same statistics.
-        edges = np.quantile(values, np.linspace(0, 1, N_BINS + 1))
+        edges = np.unique(np.quantile(values, np.linspace(0, 1, N_BINS + 1)))
+        if edges.size < 3:
+            edges = np.unique(values)
+            edges = np.append(edges, edges[-1] + 1.0)
+        edges = edges.astype(float)
         edges[-1] += 1e-6
         centres = 0.5 * (edges[:-1] + edges[1:])
+        fn = _auc if metric == "auc" else _rejection
+
         for model, data in series.items():
-            aucs = []
+            ys = []
             for lo, hi in zip(edges[:-1], edges[1:]):
                 sel = (values >= lo) & (values < hi)
-                aucs.append(_auc(data["labels"][sel], data["scores"][sel]))
-                csv_rows.append([var_name, model, f"{lo:.3f}", f"{hi:.3f}",
-                                 int(sel.sum()), f"{aucs[-1]:.5f}"])
+                ys.append(fn(data["labels"][sel], data["scores"][sel]))
+                csv_rows.append([var_name, metric, model, f"{lo:.3f}", f"{hi:.3f}",
+                                 int(sel.sum()),
+                                 f"{data['labels'][sel].mean():.4f}" if sel.sum() else "",
+                                 f"{ys[-1]:.5f}"])
             if axes is not None:
                 stl = style_for(model)
-                axes[ax_i].plot(centres, aucs, color=stl["color"],
+                arr = np.array(ys, dtype=float)
+                ok = np.isfinite(arr)
+                axes[ax_i].plot(centres[ok], arr[ok], color=stl["color"],
                                 marker=stl["marker"], markersize=4,
                                 linewidth=1.2, label=stl["label"])
         if axes is not None:
-            label = {"jet_pT": r"jet $p_T$ [GeV]", "jet_mass": "jet mass [GeV]",
-                     "multiplicity": "constituent multiplicity"}[var_name]
-            axes[ax_i].set_xlabel(label)
+            axes[ax_i].set_xlabel(AXIS_LABEL[var_name])
+            axes[ax_i].set_ylabel(METRIC_LABEL[metric])
+            if metric == "rej":
+                axes[ax_i].set_yscale("log")
+
     if axes is not None:
-        axes[0].set_ylabel("AUC within bin")
         handles, labels_ = axes[0].get_legend_handles_labels()
         fig.legend(handles, labels_, loc="lower center", ncol=3,
-                   frameon=False, bbox_to_anchor=(0.5, -0.10))
+                   frameon=False, bbox_to_anchor=(0.5, -0.12))
 
     write_csv(out_dir / f"binned_{args.experiment}.csv",
-              ["variable", "model", "bin_lo", "bin_hi", "n_jets", "auc"], csv_rows)
+              ["variable", "metric", "model", "bin_lo", "bin_hi", "n_jets",
+               "signal_fraction", "value"], csv_rows)
     if fig is not None:
         save(fig, out_dir / f"binned_{args.experiment}.pdf")
     return 0
