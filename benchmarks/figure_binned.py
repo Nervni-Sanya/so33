@@ -61,19 +61,33 @@ def _jet_variables(X: np.ndarray) -> dict[str, np.ndarray]:
     }
 
 
-MIN_BIN = 50          # below this a per-bin AUC is not meaningful
+MIN_PER_CLASS = 50    # per-bin metrics need this many jets of EACH class
+
+
+def _usable(labels: np.ndarray) -> bool:
+    """A bin needs enough signal AND background to score.
+
+    Total count is not enough: the lowest jet-mass bin is ~99.99% QCD, so a
+    rejection at 30% signal efficiency there is set by a handful of signal
+    jets and is pure noise (it produced a spurious 95 for the eta baseline
+    before this guard).
+    """
+    if labels.size == 0:
+        return False
+    n_sig = int((labels == 1).sum())
+    return min(n_sig, labels.size - n_sig) >= MIN_PER_CLASS
 
 
 def _auc(labels: np.ndarray, scores: np.ndarray) -> float:
     from sklearn.metrics import roc_auc_score
-    if labels.size < MIN_BIN or labels.min() == labels.max():
+    if not _usable(labels):
         return float("nan")
     return float(roc_auc_score(labels, scores))
 
 
 def _rejection(labels: np.ndarray, scores: np.ndarray, eff: float = 0.3) -> float:
     from sklearn.metrics import roc_curve
-    if labels.size < MIN_BIN or labels.min() == labels.max():
+    if not _usable(labels):
         return float("nan")
     fpr, tpr, _ = roc_curve(labels, scores)
     idx = int((tpr >= eff).argmax())

@@ -194,8 +194,8 @@
 | eta_invariants | 3 | 4802 | 0.898±0.002 | 0.896±0.000 | 0.945±0.000 |
 | so33_equivariant_eta_bounded | 2 | 542 | 0.505±0.003 | 0.503±0.002 | nan±nan |
 | so33_equivariant_unbounded | 2 | 542 | 0.505±0.003 | 0.503±0.002 | nan±nan |
-| so3c_equivariant_set | 3 | 9056 | 0.919±0.003 | 0.918±0.001 | 0.971±0.001 |
-| so3c_invariant_set | 3 | 5506 | 0.909±0.002 | 0.907±0.001 | 0.963±0.001 |
+| so3c_equivariant_set | 3 | 9056 | 0.919±0.002 | 0.918±0.001 | 0.971±0.001 |
+| so3c_invariant_set | 3 | 5506 | 0.909±0.003 | 0.908±0.000 | 0.963±0.002 |
 
 ## top_tagging_quick
 
