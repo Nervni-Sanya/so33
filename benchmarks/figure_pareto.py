@@ -42,11 +42,20 @@ def _load_literature(path: pathlib.Path) -> list[dict]:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--results-dir", type=str, default="results")
+    p.add_argument("--results-dir", type=str, default="results",
+                   help="Comma-separated result directories. Pass the "
+                        "parameter-matched baseline dir alongside the main "
+                        "one to show the generic model at our size.")
     p.add_argument("--experiment", type=str, default="top_tagging_canonical")
     p.add_argument("--out-dir", type=str, default=str(DEFAULT_OUT_DIR))
     p.add_argument("--literature", type=str,
                    default=str(DEFAULT_OUT_DIR / "literature_reference.csv"))
+    p.add_argument("--include", type=str,
+                   default="so3c_equivariant_set,so3c_invariant_set,"
+                           "eta_invariants,relu_mlp",
+                   help="Comma-separated models to plot, in the paper's "
+                        "curated order. Empty string plots everything found "
+                        "(useful for exploration, too cluttered for print).")
     p.add_argument("--exclude", type=str, default="relu_bottleneck",
                    help="Comma-separated models to keep out of the plot (they "
                         "stay in the CSV). The non-equivariant baseline sits at "
@@ -54,25 +63,37 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     out_dir = pathlib.Path(args.out_dir)
-    records = load_results(args.results_dir, args.experiment)
+    records = []
+    for d in args.results_dir.split(","):
+        d = d.strip()
+        if d:
+            records.extend(load_results(d, args.experiment))
     if not records:
         print(f"[pareto] no records for experiment={args.experiment!r}", file=sys.stderr)
         return 1
 
-    by_model: dict[str, list[dict]] = defaultdict(list)
+    by_model: dict[tuple[str, int], list[dict]] = defaultdict(list)
     for r in records:
-        by_model[r["model"]].append(r)
+        by_model[(r["model"], r["n_params"])].append(r)
+    sizes_per_name: dict[str, set[int]] = defaultdict(set)
+    for name, n_par in by_model:
+        sizes_per_name[name].add(n_par)
 
     rows = []
-    for model, recs in by_model.items():
+    for (model, _n_par), recs in by_model.items():
         aucs = [r["test_metrics"].get("test_auc") for r in recs]
         rejs = [r["test_metrics"].get("bg_rej_30") for r in recs]
         if not any(a is not None for a in aucs):
             continue
         auc_m, auc_s = mean_std(aucs)
         rej_m, rej_s = mean_std(rejs)
+        n_par = recs[0]["n_params"]
+        label = model
+        if len(sizes_per_name[model]) > 1:
+            label = f"{model} ({n_par/1000:.1f}k)"
         rows.append({
-            "model": model, "n_params": recs[0]["n_params"], "n_seeds": len(recs),
+            "model": model, "label": label,
+            "n_params": n_par, "n_seeds": len(recs),
             "auc": auc_m, "auc_std": auc_s, "rej": rej_m, "rej_std": rej_s,
         })
     rows.sort(key=lambda r: r["n_params"])
@@ -93,6 +114,17 @@ def main(argv: list[str] | None = None) -> int:
 
     excluded = {s.strip() for s in args.exclude.split(",") if s.strip()}
     plot_rows = [r for r in rows if r["model"] not in excluded]
+    included = [m.strip() for m in args.include.split(",") if m.strip()]
+    if included:
+        plot_rows = [r for r in plot_rows if r["model"] in included]
+        # Keep the generic baseline only at its parameter-matched size: the
+        # point of showing it is "same capacity, no geometry".
+        matched = max((r["n_params"] for r in plot_rows
+                       if r["model"].startswith("so3c")), default=None)
+        if matched is not None:
+            plot_rows = [r for r in plot_rows
+                         if r["model"].startswith(("so3c", "eta"))
+                         or abs(r["n_params"] - matched) / matched < 0.25]
 
     fig, (ax_auc, ax_rej) = plt.subplots(1, 2, figsize=FIGSIZE_WIDE)
 
@@ -102,9 +134,13 @@ def main(argv: list[str] | None = None) -> int:
     ):
         for r in plot_rows:
             stl = style_for(r["model"])
+            # r["label"] carries the size suffix when one model name appears
+            # at two parameter counts (the generic baseline at 1.8k and at 9k).
+            lbl = r.get("label", r["model"])
+            legend_label = stl["label"] if lbl == r["model"] else f"{stl['label']} [{lbl.split('(')[-1][:-1]}]"
             ax.errorbar(r["n_params"], r[key], yerr=r[std_key] or None,
                         color=stl["color"], marker=stl["marker"], markersize=6,
-                        capsize=2, linestyle="none", label=stl["label"], zorder=3)
+                        capsize=2, linestyle="none", label=legend_label, zorder=3)
         offsets = [(5, 4), (5, -9), (-6, 6), (-6, -11)]
         for i, l in enumerate(lit):
             val = float(l["auc"] if key == "auc" else l["bg_rej_30"])
