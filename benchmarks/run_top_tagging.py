@@ -45,6 +45,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--epochs",      type=int, default=30)
     p.add_argument("--results-dir", type=str, default="results")
     p.add_argument("--models",      type=str, default=None)
+    p.add_argument("--natural-hidden", type=int, default=256,
+                   help="Hidden width of the natural-width baselines (*_mlp). "
+                        "Set it to build a PARAMETER-MATCHED generic baseline "
+                        "against the so3c set models (e.g. 1293 ~ 9.05k params, "
+                        "matching so3c_equivariant_set) so the comparison "
+                        "isolates the geometric prior from raw capacity.")
     p.add_argument("--representation", choices=["aggregated", "constituents"],
                    default="aggregated",
                    help="aggregated: jet-level 6-D summary (secondary baseline; "
@@ -111,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         epochs=epochs,
         representation=rep,
         pool=args.pool,
+        natural_hidden=args.natural_hidden,
         results_dir=args.results_dir,
     )
     if models is not None:
