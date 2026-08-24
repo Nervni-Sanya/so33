@@ -1,0 +1,19 @@
+{
+  "experiment": "init_sensitivity",
+  "model": "so3c_equivariant_set",
+  "init_scheme": "normal_0.1",
+  "init_max_abs_weight": 0.3145296273123134,
+  "seed": 0,
+  "n_params": 9056,
+  "n_train": 70000,
+  "walltime_sec": 1093.7135206999956,
+  "train_metrics": {
+    "final_val_acc": 0.9175999760627747
+  },
+  "test_metrics": {
+    "test_acc": 0.9157999753952026,
+    "test_auc": 0.9700803990989282,
+    "bg_rej_30": 160.93617021276594,
+    "bg_rej_50": 69.39449541284404
+  }
+}
