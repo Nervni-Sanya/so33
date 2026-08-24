@@ -10,6 +10,7 @@ memory and returns a metrics dict that ``aggregate.py`` consumes.
 
 from __future__ import annotations
 
+import pathlib
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any
@@ -30,6 +31,10 @@ class TrainConfig:
     seed: int = 0
     device: str = "cpu"
     eval_chunk_size: int = 4096    # jets per forward pass at eval time
+    ckpt_path: str | None = None   # where to save/resume training state
+    ckpt_every: int = 1            # epochs between checkpoint writes
+    resume: bool = False           # restore from ckpt_path if it exists
+    max_seconds: float | None = None   # self-terminate before a session cap
 
 
 @dataclass
@@ -121,11 +126,38 @@ def train_classifier(
     epochs_no_improve = 0
     history: list[dict[str, float]] = []
     t0 = time.perf_counter()
+    prior_walltime = 0.0
+    start_epoch = 1
+
+    # ── Resume ────────────────────────────────────────────────────────────
+    # Kaggle caps a session at 12h, so a long run must be able to continue.
+    # The RNG state is part of the checkpoint on purpose: the batch order
+    # comes from torch.randperm below, so restoring without it would silently
+    # replay a different shuffle sequence than an uninterrupted run.
+    ckpt_file = pathlib.Path(cfg.ckpt_path) if cfg.ckpt_path else None
+    if cfg.resume and ckpt_file is not None and ckpt_file.is_file():
+        state = torch.load(ckpt_file, map_location=device, weights_only=False)
+        model.load_state_dict(state["model"])
+        optimizer.load_state_dict(state["optimizer"])
+        if scheduler is not None and state.get("scheduler") is not None:
+            scheduler.load_state_dict(state["scheduler"])
+        torch.set_rng_state(state["cpu_rng"])
+        if device.type == "cuda" and state.get("cuda_rng") is not None:
+            torch.cuda.set_rng_state(state["cuda_rng"], device)
+        start_epoch = state["epoch"] + 1
+        best_val_acc = state["best_val_acc"]
+        epochs_no_improve = state["epochs_no_improve"]
+        history = state["history"]
+        prior_walltime = state["walltime_sec"]
+        print(f"[train] resumed from {ckpt_file.name} at epoch {start_epoch}")
 
     n_train = len(X_train)
-    epochs_run = 0
+    epochs_run = start_epoch - 1
+    train_acc = val_acc = 0.0
+    val_loss = float("nan")
+    stopped_early = False
 
-    for epoch in range(1, cfg.epochs + 1):
+    for epoch in range(start_epoch, cfg.epochs + 1):
         model.train()
         perm = torch.randperm(n_train, device=device)
 
@@ -175,11 +207,37 @@ def train_classifier(
             epochs_no_improve += 1
 
         epochs_run = epoch
+        elapsed = prior_walltime + (time.perf_counter() - t0)
+
+        if ckpt_file is not None and (epoch % cfg.ckpt_every == 0
+                                      or epoch == cfg.epochs):
+            ckpt_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = ckpt_file.with_suffix(ckpt_file.suffix + ".tmp")
+            torch.save({
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict() if scheduler is not None else None,
+                "cpu_rng": torch.get_rng_state(),
+                "cuda_rng": (torch.cuda.get_rng_state(device)
+                             if device.type == "cuda" else None),
+                "epoch": epoch,
+                "best_val_acc": best_val_acc,
+                "epochs_no_improve": epochs_no_improve,
+                "history": history,
+                "walltime_sec": elapsed,
+            }, tmp)
+            tmp.replace(ckpt_file)      # atomic: never leave a torn checkpoint
+
         if (cfg.early_stop_patience is not None
                 and epochs_no_improve >= cfg.early_stop_patience):
             break
+        if cfg.max_seconds is not None and elapsed > cfg.max_seconds:
+            print(f"[train] stopping at epoch {epoch}: {elapsed:.0f}s exceeds "
+                  f"max_seconds={cfg.max_seconds:.0f}. Rerun with --resume.")
+            stopped_early = True
+            break
 
-    walltime = time.perf_counter() - t0
+    walltime = prior_walltime + (time.perf_counter() - t0)
 
     peak_mem_mb = 0.0
     if device.type == "cuda":

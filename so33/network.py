@@ -141,4 +141,4 @@ class BottleneckClassifier(nn.Module):
         reg = getattr(self.activation, "regularization_loss", None)
         if callable(reg):
             return reg()
-        return torch.zeros((), dtype=self.dtype)
+        return torch.zeros((), dtype=self.dtype, device=next(self.parameters()).device)

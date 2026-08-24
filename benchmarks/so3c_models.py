@@ -186,7 +186,7 @@ class SO3CInvariantSetClassifier(nn.Module):
         return self.mlp(self._features(x))
 
     def regularization_loss(self) -> torch.Tensor:
-        return torch.zeros((), dtype=self.dtype)
+        return torch.zeros((), dtype=self.dtype, device=next(self.parameters()).device)
 
 
 class SO3CEquivariantSetClassifier(nn.Module):
@@ -380,7 +380,7 @@ class SO3CInvariantsClassifier(nn.Module):
         return self.mlp(invariant_features(x.to(self.dtype)))
 
     def regularization_loss(self) -> torch.Tensor:
-        return torch.zeros((), dtype=self.dtype)
+        return torch.zeros((), dtype=self.dtype, device=next(self.parameters()).device)
 
 
 class EtaOnlyClassifier(nn.Module):
@@ -409,7 +409,7 @@ class EtaOnlyClassifier(nn.Module):
         return self.mlp(feats)
 
     def regularization_loss(self) -> torch.Tensor:
-        return torch.zeros((), dtype=self.dtype)
+        return torch.zeros((), dtype=self.dtype, device=next(self.parameters()).device)
 
 
 class SO3CFlowClassifier(nn.Module):

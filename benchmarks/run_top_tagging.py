@@ -28,6 +28,8 @@ from __future__ import annotations
 import argparse
 import sys
 
+import torch
+
 from .datasets import (
     load_top_tagging, load_top_tagging_constituents, synthetic_tabular,
 )
@@ -76,6 +78,28 @@ def main(argv: list[str] | None = None) -> int:
                    help="Cap the number of canonical-train jets (memory/time); "
                         "val and test are always loaded in full. Only used "
                         "with --canonical-splits.")
+    p.add_argument("--device", type=str, default="cpu",
+                   help="cpu | cuda | cuda:0 ...")
+    p.add_argument("--dtype", choices=["float32", "float64"], default="float64",
+                   help="float32 is ~32x faster on a T4 (no fp64 tensor cores) "
+                        "and keeps Lorentz invariance of the logits to 2e-7.")
+    p.add_argument("--batch-size", type=int, default=128)
+    p.add_argument("--channels", type=int, default=None,
+                   help="so3c set models: complex channels (the geometry axis "
+                        "of the scaling study).")
+    p.add_argument("--hidden", type=int, default=None,
+                   help="so3c set models: readout MLP width (the generic-"
+                        "capacity axis of the scaling study).")
+    p.add_argument("--act-hidden", type=int, default=None,
+                   help="so3c set models: width of the connection MLP.")
+    p.add_argument("--ckpt-dir", type=str, default=None,
+                   help="Directory for training checkpoints; --resume needs it.")
+    p.add_argument("--resume", action="store_true",
+                   help="Resume interrupted training and skip models whose "
+                        "result JSON already exists.")
+    p.add_argument("--max-seconds", type=float, default=None,
+                   help="Checkpoint and stop before a session cap (Kaggle "
+                        "kills a notebook at 12h).")
     args = p.parse_args(argv)
 
     if args.quick:
@@ -110,6 +134,12 @@ def main(argv: list[str] | None = None) -> int:
         else None
     )
 
+    so3c_kwargs = {k: v for k, v in (
+        ("channels", args.channels),
+        ("hidden", args.hidden),
+        ("act_hidden", args.act_hidden),
+    ) if v is not None} or None
+
     kwargs = dict(
         experiment=experiment,
         split=split,
@@ -119,6 +149,13 @@ def main(argv: list[str] | None = None) -> int:
         pool=args.pool,
         natural_hidden=args.natural_hidden,
         results_dir=args.results_dir,
+        device=args.device,
+        dtype=torch.float32 if args.dtype == "float32" else torch.float64,
+        batch_size=args.batch_size,
+        so3c_kwargs=so3c_kwargs,
+        ckpt_dir=args.ckpt_dir,
+        resume=args.resume,
+        max_seconds=args.max_seconds,
     )
     if models is not None:
         kwargs["models"] = models

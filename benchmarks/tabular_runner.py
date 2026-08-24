@@ -38,6 +38,7 @@ def evaluate_test(
     X_test: torch.Tensor,
     y_test: torch.Tensor,
     n_classes: int,
+    chunk_size: int = 4096,
 ) -> dict[str, float]:
     """Return test accuracy, binary AUC, and background rejection.
 
@@ -50,8 +51,13 @@ def evaluate_test(
     for non-tagging tabular tasks (still cheap to compute).
     """
     model.eval()
+    # The model may live on CUDA after training while the split is still on
+    # CPU: move the test tensors to wherever the parameters are.
+    device = next(model.parameters()).device
+    X_test = X_test.to(device)
+    y_test = y_test.to(device)
     with torch.no_grad():
-        logits = forward_in_chunks(model, X_test)
+        logits = forward_in_chunks(model, X_test, chunk_size)
         pred   = logits.argmax(dim=-1)
         acc    = (pred == y_test).float().mean().item()
 
@@ -97,6 +103,13 @@ def run_tabular_experiment(
     representation: str = "flat",
     pool: str = "mean",
     results_dir: pathlib.Path | str = "results",
+    device: str = "cpu",
+    dtype: torch.dtype = torch.float64,
+    so3c_kwargs: dict | None = None,
+    eval_chunk_size: int = 4096,
+    ckpt_dir: pathlib.Path | str | None = None,
+    resume: bool = False,
+    max_seconds: float | None = None,
 ) -> list[dict]:
     """Train a set of model variants on ``split`` and write one JSON per run.
 
@@ -134,6 +147,19 @@ def run_tabular_experiment(
             family = "matched_bottleneck"
         print(f"[{experiment}] {name} ({family}) | train ...")
 
+        out_path = out_dir / f"{experiment}__{name}__seed{seed}.json"
+        if resume and out_path.is_file():
+            # A restarted session (Kaggle caps sessions at 12h) should pick up
+            # at the first unfinished model rather than redo completed ones.
+            print(f"[{experiment}] SKIP {name}: {out_path.name} already exists")
+            summary.append(json.loads(out_path.read_text()))
+            continue
+
+        # Seed BEFORE constructing the model: nn.Linear draws its weights from
+        # the global RNG, and train_classifier only seeds afterwards, so until
+        # this line every run started from a different initialisation and two
+        # identical commands could not reproduce each other.
+        torch.manual_seed(seed)
         model = build_model(
             name,
             in_features  = split.n_features,
@@ -142,15 +168,23 @@ def run_tabular_experiment(
             natural_hidden = natural_hidden,
             representation = representation,
             pool = pool,
+            dtype = dtype,
+            so3c_kwargs = so3c_kwargs,
         )
+        ckpt_path = (pathlib.Path(ckpt_dir) / f"{experiment}__{name}__seed{seed}.pt"
+                     if ckpt_dir else None)
         cfg = TrainConfig(
             epochs=epochs, batch_size=batch_size, lr=lr,
             seed=seed, cosine_schedule=True, grad_clip=1.0,
+            device=device, eval_chunk_size=eval_chunk_size,
+            ckpt_path=str(ckpt_path) if ckpt_path else None,
+            resume=resume, max_seconds=max_seconds,
         )
         train_res = train_classifier(
             model, split.X_train, split.y_train, split.X_val, split.y_val, cfg,
         )
-        test_res = evaluate_test(model, split.X_test, split.y_test, split.n_classes)
+        test_res = evaluate_test(model, split.X_test, split.y_test,
+                                 split.n_classes, eval_chunk_size)
 
         record = {
             "experiment":    experiment,
@@ -175,7 +209,6 @@ def run_tabular_experiment(
             "config":        asdict(cfg),
             "history":       train_res.history,
         }
-        out_path = out_dir / f"{experiment}__{name}__seed{seed}.json"
         out_path.write_text(json.dumps(record, indent=2))
 
         # Per-jet test scores go beside the JSON as a compact npz (~1.6 MB

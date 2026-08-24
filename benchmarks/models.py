@@ -127,7 +127,7 @@ class NaturalWidthMLP(nn.Module):
         return self.l2(self.activation(self.l1(x)))
 
     def regularization_loss(self) -> torch.Tensor:
-        return torch.zeros((), dtype=self.dtype)
+        return torch.zeros((), dtype=self.dtype, device=next(self.parameters()).device)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -329,7 +329,7 @@ class EtaInvariantsClassifier(nn.Module):
         return self.mlp(feats)
 
     def regularization_loss(self) -> torch.Tensor:
-        return torch.zeros((), dtype=self.dtype)
+        return torch.zeros((), dtype=self.dtype, device=next(self.parameters()).device)
 
 
 class EquivariantSO33Classifier(nn.Module):
@@ -424,6 +424,7 @@ def _build_deepsets(
     so33_kwargs: dict,
     bound_input: bool,
     pool: str,
+    so3c_kwargs: dict | None = None,
 ) -> nn.Module:
     """Construct the per-constituent Deep Sets variant for a model name."""
     def make_so33(**extra):
@@ -516,11 +517,22 @@ def _build_deepsets(
             SO3CInteractionSetClassifier,
             SO3CInvariantSetClassifier,
         )
+        # Capacity knobs (channels / hidden / act_hidden / T) come through
+        # so3c_kwargs so a scaling study is a CLI matter, not a code edit.
+        extra = dict(so3c_kwargs or {})
         if name == "so3c_invariant_set":
-            return SO3CInvariantSetClassifier(out_features=out_features, dtype=dtype)
+            extra.pop("channels", None)      # no channel axis in the no-flow model
+            extra.pop("act_hidden", None)
+            extra.pop("T", None)
+            return SO3CInvariantSetClassifier(out_features=out_features,
+                                              dtype=dtype, **extra)
         if name == "so3c_equivariant_set":
-            return SO3CEquivariantSetClassifier(out_features=out_features, dtype=dtype)
-        return SO3CInteractionSetClassifier(out_features=out_features, dtype=dtype)
+            return SO3CEquivariantSetClassifier(out_features=out_features,
+                                                dtype=dtype, **extra)
+        extra.pop("channels", None)          # interaction model is single-channel
+        extra.pop("act_hidden", None)
+        return SO3CInteractionSetClassifier(out_features=out_features,
+                                            dtype=dtype, **extra)
 
     raise ValueError(f"Unknown model name: {name!r}. Known: {ALL_MODELS}")
 
@@ -540,6 +552,7 @@ def build_model(
     bound_input: bool | None = None,
     max_input_norm: float | None = 8.0,
     pool: str = "mean",
+    so3c_kwargs: dict | None = None,
 ) -> nn.Module:
     """Construct a model by string name.
 
@@ -595,7 +608,7 @@ def build_model(
             name, in_features, out_features,
             T=T, adjoint=adjoint, dtype=dtype,
             natural_hidden=natural_hidden, so33_kwargs=so33_kwargs,
-            bound_input=bound_input, pool=pool,
+            bound_input=bound_input, pool=pool, so3c_kwargs=so3c_kwargs,
         )
 
     # Flat real-data path: when bound_input is off (which it is by default,
@@ -643,6 +656,7 @@ def build_model(
         return SO3CBottleneck(
             in_features=in_features, out_features=out_features,
             mode="dynamic" if name == "so3c" else "static", dtype=dtype,
+            **(so3c_kwargs or {}),
         )
     if name == "so3c_multi":
         from benchmarks.so3c_models import MultiChannelSO3C
