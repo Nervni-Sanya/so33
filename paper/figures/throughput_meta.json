@@ -1,0 +1,8 @@
+{
+  "torch": "2.11.0+cpu",
+  "threads": 6,
+  "device": "cpu",
+  "n_constituents": 32,
+  "train_batch": 128,
+  "epoch_scaled_to_n_jets": 1211000
+}
