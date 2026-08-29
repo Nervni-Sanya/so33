@@ -127,11 +127,28 @@ HIGGS_URL = "https://archive.ics.uci.edu/ml/machine-learning-databases/00280/HIG
 HIGGS_FILENAME = "HIGGS.csv.gz"
 
 
+# HIGGS column layout (Baldi, Sadowski & Whiteson 2014). Column 0 is the
+# label; 1..21 are low-level kinematics (lepton pT/eta/phi, missing energy
+# magnitude and phi, then four jets x (pT, eta, phi, b-tag)); 22..28 are
+# high-level derived variables, and every one of them is a Lorentz
+# INVARIANT MASS: m_jj, m_jjj, m_lv, m_jlv, m_bb, m_wbb, m_wwbb.
+#
+# That split is what makes a feature-set ablation meaningful here: the
+# high-level block hands the model the invariants a physicist would build
+# by hand, while the low-level block forces it to reconstruct them.
+HIGGS_FEATURE_SLICES = {
+    "all":  slice(1, 29),
+    "low":  slice(1, 22),
+    "high": slice(22, 29),
+}
+
+
 def load_higgs(
     cache_dir: pathlib.Path | str,
     max_samples: int | None = 200_000,
     seed: int = 0,
     standardise: bool = True,
+    feature_set: str = "all",
 ) -> DatasetSplit:
     """Load the UCI HIGGS dataset.
 
@@ -176,7 +193,10 @@ def load_higgs(
             rows.append([float(v) for v in line.rstrip("\n").split(",")])
     arr = np.asarray(rows, dtype=np.float32)
     y_np = arr[:, 0].astype(np.int64)
-    X_np = arr[:, 1:]
+    if feature_set not in HIGGS_FEATURE_SLICES:
+        raise ValueError(f"feature_set must be one of "
+                         f"{sorted(HIGGS_FEATURE_SLICES)}; got {feature_set!r}")
+    X_np = arr[:, HIGGS_FEATURE_SLICES[feature_set]]
 
     X = torch.from_numpy(X_np)
     y = torch.from_numpy(y_np)
@@ -189,7 +209,10 @@ def load_higgs(
         X_train=Xtr, y_train=ytr,
         X_val=Xva,   y_val=yva,
         X_test=Xte,  y_test=yte,
-        name="higgs",
+        # The feature set is part of the identity: results are keyed by
+        # experiment/model/seed only, so two feature sets sharing a name
+        # would overwrite each other's JSON.
+        name=f"higgs(features={feature_set})",
         n_features=Xtr.shape[1],
         n_classes=2,
     )

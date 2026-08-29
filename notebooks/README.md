@@ -33,6 +33,31 @@ Regenerating them from scratch (if ever needed) takes the raw parquet:
 python -m benchmarks.download_top_tagging --cache-dir data --source-dir data/toptagging --skip-download --n-constituents 32
 ```
 
+## 1b. Driving Kaggle from this machine
+
+**The official `kaggle` CLI does not work here.** It fails every call with
+`SSLError(SSLEOFError(8, 'EOF occurred in violation of protocol'))` — its TLS
+stack cannot complete the handshake — while the same endpoints answer HTTP 200
+through plain `urllib` with the same credentials. So use `benchmarks/kaggle_client.py`,
+which talks to the REST API directly:
+
+```bash
+python -m benchmarks.kaggle_client status
+python -m benchmarks.kaggle_client push --metadata notebooks/kernel-metadata.json
+python -m benchmarks.kaggle_client wait --slug <user>/so3c-scaling
+python -m benchmarks.kaggle_client fetch --slug <user>/so3c-scaling --out kaggle_out
+```
+
+Fill in your username in `notebooks/kernel-metadata.json` (both the kernel `id`
+and the `dataset_sources` entry) before the first push. `push` prompts for
+confirmation because it runs on your account and spends GPU quota; `--yes`
+skips the prompt for scripted reruns. Credentials are read from
+`~/.kaggle/kaggle.json` and are never printed or written to a result file.
+
+The client deliberately does **not** create datasets: a 0.93 GB multipart
+upload over a link that already breaks the CLI is not worth the failure modes.
+Upload the npz once through the web UI as described above.
+
 ## 2. Session settings
 
 - Accelerator: **GPU T4 x2**. Only one GPU is used — there is no DataParallel in

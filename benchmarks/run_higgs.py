@@ -24,6 +24,8 @@ from __future__ import annotations
 import argparse
 import sys
 
+import torch
+
 from .datasets import load_higgs, synthetic_tabular
 from .tabular_runner import run_tabular_experiment
 
@@ -39,6 +41,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed",        type=int, default=0)
     p.add_argument("--epochs",      type=int, default=30)
     p.add_argument("--results-dir", type=str, default="results")
+    p.add_argument("--device", type=str, default="cpu",
+                   help="cpu | cuda | cuda:0 ...")
+    p.add_argument("--dtype", choices=["float32", "float64"], default="float64")
+    p.add_argument("--batch-size", type=int, default=128)
+    p.add_argument("--feature-set", choices=["all", "low", "high"], default="all",
+                   help="all: 28 features. low: the 21 low-level kinematic "
+                        "ones. high: the 7 high-level invariant masses "
+                        "(m_jj, m_jjj, m_lv, m_jlv, m_bb, m_wbb, m_wwbb).")
     p.add_argument("--models",      type=str, default=None,
                    help="Comma-separated subset of model names.")
     args = p.parse_args(argv)
@@ -52,9 +62,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         split = load_higgs(cache_dir=args.cache_dir,
                            max_samples=args.max_samples,
-                           seed=args.seed, standardise=True)
+                           seed=args.seed, standardise=True,
+                           feature_set=args.feature_set)
         epochs = args.epochs
-        experiment = "higgs"
+        # The feature set goes into the experiment name: results are keyed
+        # by experiment/model/seed, so "all" and "low" would otherwise
+        # overwrite each other.
+        experiment = ("higgs" if args.feature_set == "all"
+                      else f"higgs_{args.feature_set}")
 
     models = (
         [m.strip() for m in args.models.split(",")] if args.models
@@ -67,6 +82,9 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed,
         epochs=epochs,
         results_dir=args.results_dir,
+        device=args.device,
+        dtype=torch.float32 if args.dtype == "float32" else torch.float64,
+        batch_size=args.batch_size,
     )
     if models is not None:
         kwargs["models"] = models

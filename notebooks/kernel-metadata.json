@@ -1,0 +1,13 @@
+{
+  "id": "REPLACE_WITH_YOUR_USERNAME/so3c-scaling",
+  "title": "SO3C scaling study",
+  "code_file": "kaggle_scaling.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": ["REPLACE_WITH_YOUR_USERNAME/so3c-top-tagging-k32"],
+  "competition_sources": [],
+  "kernel_sources": []
+}
