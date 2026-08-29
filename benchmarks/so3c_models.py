@@ -38,15 +38,41 @@ from so3c.lift import jet_bivectors, minkowski_inner
 # term -> chance level): every readout here includes pairwise statistics.
 # ─────────────────────────────────────────────────────────────────────────
 
-def _pooled_bivector_invariants(z: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    """(B, K, 3) complex states + (B, K) mask -> (B, 11) invariant features.
+# Feature counts, so callers size their first Linear correctly.
+N_POOLED_FULL = 11
+N_POOLED_SIMPLE = 5
+
+
+def _pooled_bivector_invariants(
+    z: torch.Tensor,
+    mask: torch.Tensor,
+    simple: bool = False,
+) -> torch.Tensor:
+    """(B, K, 3) complex states + (B, K) mask -> (B, 11) invariant features,
+    or (B, 5) when ``simple=True``.
 
     All features are SO(3, C)-invariant and permutation-invariant: masked
     moments of the per-particle invariants z_a . z_a, of the pairwise
     invariants z_a . z_b, and the jet-total invariant. arcsinh-compressed.
-    For raw (simple) bivectors the Im parts vanish identically; after a
-    geodesic flow the states are no longer simple and Im features carry
-    signal — which is exactly the flow's contribution to the readout.
+
+    ``simple=True`` is for RAW jet bivectors, i.e. before any flow. Six of the
+    eleven features are then identically zero, by algebra rather than by
+    accident, and feeding them to a Linear only wastes weights:
+
+      * every Im feature vanishes. A simple bivector p ^ q has E.B = 0, so
+        Im(z_a . z_a) = 0; and two bivectors sharing the leg P give
+        Im(z_a . z_b) ~ eps(p_a, P, p_b, P) = 0.
+      * the jet-total invariant vanishes. bivector_lift is linear in its
+        first argument and jet_bivectors pairs every constituent with the
+        same P = sum_a p_a, so
+            z_tot = sum_a bivec(p_a, P) = bivec(P, P) = 0
+        exactly, hence q_tot = 0 in both real and imaginary parts.
+
+    Measured on 2000 real jets: the six dropped features have magnitude
+    1e-13 or smaller (q_tot below 1e-26), while the five kept ones are O(1).
+    After a flow the states are no longer simple and all eleven carry
+    signal — that is precisely the flow's contribution to the readout — so
+    the flow models keep ``simple=False``.
     """
     B, K, _ = z.shape
     pair_mask = mask.unsqueeze(-1) * mask.unsqueeze(-2)          # (B, K, K)
@@ -63,20 +89,24 @@ def _pooled_bivector_invariants(z: torch.Tensor, mask: torch.Tensor) -> torch.Te
     z_tot = (z * mask.unsqueeze(-1)).sum(dim=1)                  # (B, 3)
     q_tot = (z_tot * z_tot).sum(dim=-1)                          # (B,) complex
 
-    feats = torch.stack([
+    live = [
         s_diag.real.sum(-1) / n,
         s_diag.real.abs().sum(-1) / n,
-        s_diag.imag.sum(-1) / n,
         S_off.real.sum((-2, -1)) / n_off,
         S_off.real.pow(2).sum((-2, -1)) / n_off,
         S_off.real.abs().amax(dim=(-2, -1)),
+    ]
+    if simple:
+        return torch.asinh(torch.stack(live, dim=-1))            # (B, 5)
+
+    feats = live[:2] + [s_diag.imag.sum(-1) / n] + live[2:] + [
         S_off.imag.sum((-2, -1)) / n_off,
         S_off.imag.pow(2).sum((-2, -1)) / n_off,
         S_off.imag.abs().amax(dim=(-2, -1)),
         q_tot.real,
         q_tot.imag,
-    ], dim=-1)                                                   # (B, 11)
-    return torch.asinh(feats)
+    ]
+    return torch.asinh(torch.stack(feats, dim=-1))               # (B, 11)
 
 
 def _minkowski_stats(p4: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -167,8 +197,10 @@ class SO3CInvariantSetClassifier(nn.Module):
     ) -> None:
         super().__init__()
         self.dtype = dtype
+        # 5 live bivector invariants (the other 6 are identically zero for
+        # raw bivectors — see _pooled_bivector_invariants) + 7 Minkowski.
         self.mlp = nn.Sequential(
-            nn.Linear(18, hidden), nn.ReLU(),
+            nn.Linear(N_POOLED_SIMPLE + 7, hidden), nn.ReLU(),
             nn.Linear(hidden, hidden), nn.ReLU(),
             nn.Linear(hidden, out_features),
         ).to(dtype)
@@ -178,7 +210,8 @@ class SO3CInvariantSetClassifier(nn.Module):
         p4, mask = x[..., :4], x[..., 4]
         z = jet_bivectors(p4, mask)
         return torch.cat(
-            [_pooled_bivector_invariants(z, mask), _minkowski_stats(p4, mask)],
+            [_pooled_bivector_invariants(z, mask, simple=True),
+             _minkowski_stats(p4, mask)],
             dim=-1,
         )
 
