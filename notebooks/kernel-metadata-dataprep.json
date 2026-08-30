@@ -1,5 +1,5 @@
 {
-  "id": "nsanya/so3c-dataprep",
+  "id": "nsanya/so3c-data-prep-top-tagging-k-32",
   "title": "SO3C data prep (top tagging K=32)",
   "code_file": "kaggle_dataprep.ipynb",
   "language": "python",
