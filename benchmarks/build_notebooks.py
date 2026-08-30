@@ -196,6 +196,106 @@ print("OK - npz verified; this kernel's output feeds the scaling runs")
     _finalise(cells, NB_DIR / "kaggle_dataprep.ipynb")
 
 
+
+def build_validate(blob: str) -> None:
+    """Cheap port validation before any canonical GPU hours are spent.
+
+    Runs the internal protocol (70k jets, 30 epochs), whose CPU reference is
+    known with error bars from three seeds:
+
+        so3c_equivariant_set  AUC 0.9710 +- 0.0011   rej@0.3 189 +- 49
+        so3c_invariant_set    AUC 0.9626 +- 0.0005   rej@0.3 129 +- 13
+        eta_invariants        AUC 0.9447 +- 0.0004   rej@0.3  46 +-  5
+
+    Minutes on a GPU instead of the ~1.5 h a canonical validation run would
+    cost, and it checks against a spread rather than a single number. Also
+    exercises checkpoint/resume on CUDA, which has only ever been tested on
+    CPU.
+    """
+    cells = [
+        md("""
+# SO3C GPU port validation (internal protocol)
+
+Blocking gate. GPU float32 must land inside the CPU float64 reference band
+before any canonical scaling run is worth its GPU-hours.
+"""),
+        code("""
+import subprocess
+print(subprocess.run(["nvidia-smi",
+                      "--query-gpu=name,compute_cap,memory.total",
+                      "--format=csv,noheader"],
+                     capture_output=True, text=True).stdout.strip())
+"""),
+        code(GPU_SETUP),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code("""
+import glob, pathlib
+cands = glob.glob("/kaggle/input/*/top_tagging_train.npz")
+assert cands, "add the data-prep kernel's output as a data source"
+DATA = str(pathlib.Path(cands[0]).parent)
+print("data:", DATA)
+REF = {"so3c_equivariant_set": (0.9710, 0.0011),
+       "so3c_invariant_set":   (0.9626, 0.0005),
+       "eta_invariants":       (0.9447, 0.0004)}
+"""),
+        code("""
+ok = run(["benchmarks.run_top_tagging",
+          "--cache-dir", DATA, "--representation", "constituents",
+          "--max-samples", "100000", "--epochs", "30",
+          "--normalize", "global", "--seed", "0",
+          "--device", "cuda", "--dtype", "float32", "--batch-size", "512",
+          "--models", ",".join(REF),
+          "--results-dir", "/kaggle/working/results_validate",
+          "--ckpt-dir", "/kaggle/working/checkpoints/validate", "--resume",
+          "--max-seconds", "36000"])
+assert ok, "validation run failed"
+"""),
+        code("""
+import json
+print("%-24s%10s%12s%9s" % ("model", "GPU AUC", "CPU ref", "delta"))
+worst = 0.0
+for m, (ref, sd) in REF.items():
+    r = json.load(open("/kaggle/working/results_validate/"
+                       "top_tagging_constituents__%s__seed0.json" % m))
+    auc = r["test_metrics"]["test_auc"]
+    d = auc - ref
+    worst = max(worst, abs(d) / max(sd, 1e-4))
+    print("%-24s%10.4f%9.4f+-%.4f%+9.4f" % (m, auc, ref, sd, d))
+print()
+print("largest deviation: %.1f sigma of the CPU seed spread" % worst)
+assert worst < 5.0, "GPU port deviates from the CPU reference"
+print("PORT VALIDATED")
+"""),
+        code("""
+# Checkpoint/resume on CUDA: interrupt, resume, compare per-epoch history.
+import json, shutil, pathlib
+shutil.rmtree("/kaggle/working/rc", ignore_errors=True)
+base = ["benchmarks.run_top_tagging", "--cache-dir", DATA,
+        "--representation", "constituents", "--max-samples", "20000",
+        "--epochs", "6", "--normalize", "global", "--seed", "0",
+        "--device", "cuda", "--dtype", "float32", "--batch-size", "256",
+        "--models", "so3c_invariant_set"]
+run(base + ["--results-dir", "/kaggle/working/rc/cont"])
+run(base + ["--results-dir", "/kaggle/working/rc/int",
+            "--ckpt-dir", "/kaggle/working/rc/ck", "--max-seconds", "20"])
+for f in pathlib.Path("/kaggle/working/rc/int").glob("*.json"):
+    f.unlink()
+run(base + ["--results-dir", "/kaggle/working/rc/int",
+            "--ckpt-dir", "/kaggle/working/rc/ck", "--resume"])
+name = "top_tagging_constituents__so3c_invariant_set__seed0.json"
+c = json.load(open("/kaggle/working/rc/cont/" + name))
+i = json.load(open("/kaggle/working/rc/int/" + name))
+same = ([h["val_acc"] for h in c["history"]] ==
+        [h["val_acc"] for h in i["history"]])
+print("resume reproduces continuous training on CUDA:", same)
+print("AUC %.10f vs %.10f" % (c["test_metrics"]["test_auc"],
+                              i["test_metrics"]["test_auc"]))
+"""),
+    ]
+    _finalise(cells, NB_DIR / "kaggle_validate.ipynb")
+
+
 def build_scaling(blob: str) -> None:
     cells = [
         md("""
@@ -297,6 +397,7 @@ def main() -> int:
     blob = embed_code()
     print("embedded code: %.0f KB base64" % (len(blob) / 1024))
     build_dataprep(blob)
+    build_validate(blob)
     build_scaling(blob)
     return 0
 

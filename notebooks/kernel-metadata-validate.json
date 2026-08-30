@@ -1,0 +1,15 @@
+{
+  "id": "nsanya/so3c-gpu-validation",
+  "title": "SO3C GPU validation",
+  "code_file": "kaggle_validate.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [
+    "nsanya/so3c-data-prep-top-tagging-k-32"
+  ]
+}
