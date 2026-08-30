@@ -44,6 +44,7 @@ import urllib.request
 
 API = "https://www.kaggle.com/api/v1"
 TIMEOUT = 600
+RETRIES = 5
 
 
 class KaggleError(RuntimeError):
@@ -77,15 +78,26 @@ def _request(method: str, endpoint: str, payload: dict | None = None) -> dict | 
                  "Content-Type": "application/json",
                  "User-Agent": "so3c-benchmarks/1.0"},
     )
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            body = r.read().decode()
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode()[:400]
-        raise KaggleError(f"HTTP {e.code} on {method} {endpoint}: {detail}") from None
-    except Exception as e:                       # network / TLS
-        raise KaggleError(f"{type(e).__name__} on {method} {endpoint}: {e}") from None
-    return json.loads(body) if body else {}
+    # Transient TLS resets are common on this link ("EOF occurred in violation
+    # of protocol"), and a 12-hour status poll must not die on one. HTTP
+    # errors are real answers from Kaggle and are never retried.
+    last: Exception | None = None
+    for attempt in range(RETRIES):
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                body = r.read().decode()
+            return json.loads(body) if body else {}
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode()[:400]
+            raise KaggleError(
+                f"HTTP {e.code} on {method} {endpoint}: {detail}") from None
+        except Exception as e:                   # network / TLS
+            last = e
+            if attempt < RETRIES - 1:
+                time.sleep(2 ** attempt)
+    raise KaggleError(
+        f"{type(last).__name__} on {method} {endpoint} "
+        f"after {RETRIES} attempts: {last}") from None
 
 
 # ── operations ────────────────────────────────────────────────────────────
