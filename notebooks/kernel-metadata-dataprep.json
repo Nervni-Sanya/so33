@@ -1,0 +1,13 @@
+{
+  "id": "nsanya/so3c-dataprep",
+  "title": "SO3C data prep (top tagging K=32)",
+  "code_file": "kaggle_dataprep.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": []
+}

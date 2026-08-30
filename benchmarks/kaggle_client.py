@@ -43,7 +43,7 @@ import urllib.parse
 import urllib.request
 
 API = "https://www.kaggle.com/api/v1"
-TIMEOUT = 60
+TIMEOUT = 600
 
 
 class KaggleError(RuntimeError):
@@ -114,9 +114,12 @@ def push_kernel(metadata_path: pathlib.Path | str,
     if not nb.is_file():
         raise KaggleError(f"notebook not found: {nb}")
 
+    # The push endpoint wants the numeric kernel id in "id" and the
+    # "user/name" slug in "slug"; sending the slug as "id" gets a 400
+    # ("Could not convert string to integer").
     payload = {
-        "id": meta["id"],
-        "title": meta.get("title", meta["id"].split("/")[-1]),
+        "slug": meta["id"],
+        "newTitle": meta.get("title", meta["id"].split("/")[-1]),
         "text": nb.read_text(encoding="utf-8"),
         "language": meta.get("language", "python"),
         "kernelType": meta.get("kernel_type", "notebook"),
