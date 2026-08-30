@@ -231,8 +231,16 @@ print(subprocess.run(["nvidia-smi",
         code(RUNNER),
         code("""
 import glob, pathlib
-cands = glob.glob("/kaggle/input/*/top_tagging_train.npz")
-assert cands, "add the data-prep kernel's output as a data source"
+# The data-prep kernel wrote data/top_tagging_*.npz, so the mounted path is
+# one level deeper than /kaggle/input/<source>/ -- search recursively and
+# show what is actually mounted when nothing matches.
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+if not cands:
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        print("mounted:", root)
+        for sub in sorted(glob.glob(root + "/**/*", recursive=True))[:20]:
+            print("   ", sub)
+    raise AssertionError("top_tagging_train.npz not found under /kaggle/input")
 DATA = str(pathlib.Path(cands[0]).parent)
 print("data:", DATA)
 REF = {"so3c_equivariant_set": (0.9710, 0.0011),
@@ -240,32 +248,51 @@ REF = {"so3c_equivariant_set": (0.9710, 0.0011),
        "eta_invariants":       (0.9447, 0.0004)}
 """),
         code("""
-ok = run(["benchmarks.run_top_tagging",
-          "--cache-dir", DATA, "--representation", "constituents",
-          "--max-samples", "100000", "--epochs", "30",
-          "--normalize", "global", "--seed", "0",
-          "--device", "cuda", "--dtype", "float32", "--batch-size", "512",
-          "--models", ",".join(REF),
-          "--results-dir", "/kaggle/working/results_validate",
-          "--ckpt-dir", "/kaggle/working/checkpoints/validate", "--resume",
-          "--max-seconds", "36000"])
-assert ok, "validation run failed"
+# Run the same protocol twice, in float64 and in float32. The CPU reference
+# is float64, so comparing a float32 GPU run against it confounds two
+# changes at once: hardware (different reduction order) and precision. The
+# float64 GPU run isolates the first; the float32-vs-float64 gap on the
+# same card measures the second.
+for dt in ("float64", "float32"):
+    ok = run(["benchmarks.run_top_tagging",
+              "--cache-dir", DATA, "--representation", "constituents",
+              "--max-samples", "100000", "--epochs", "30",
+              "--normalize", "global", "--seed", "0",
+              "--device", "cuda", "--dtype", dt, "--batch-size", "512",
+              "--models", ",".join(REF),
+              "--results-dir", "/kaggle/working/results_" + dt,
+              "--ckpt-dir", "/kaggle/working/checkpoints/" + dt, "--resume",
+              "--max-seconds", "36000"])
+    assert ok, dt + " run failed"
 """),
         code("""
 import json
-print("%-24s%10s%12s%9s" % ("model", "GPU AUC", "CPU ref", "delta"))
-worst = 0.0
+
+def load(dt, m):
+    p = "/kaggle/working/results_%s/top_tagging_constituents__%s__seed0.json"
+    return json.load(open(p % (dt, m)))["test_metrics"]
+
+print("%-24s%10s%10s%10s%12s" % ("model", "GPU f64", "GPU f32",
+                                 "CPU f64", "f64-CPU"))
+worst_hw = 0.0
+worst_prec = 0.0
 for m, (ref, sd) in REF.items():
-    r = json.load(open("/kaggle/working/results_validate/"
-                       "top_tagging_constituents__%s__seed0.json" % m))
-    auc = r["test_metrics"]["test_auc"]
-    d = auc - ref
-    worst = max(worst, abs(d) / max(sd, 1e-4))
-    print("%-24s%10.4f%9.4f+-%.4f%+9.4f" % (m, auc, ref, sd, d))
+    a64 = load("float64", m)["test_auc"]
+    a32 = load("float32", m)["test_auc"]
+    worst_hw = max(worst_hw, abs(a64 - ref))
+    worst_prec = max(worst_prec, abs(a32 - a64))
+    print("%-24s%10.4f%10.4f%10.4f%+12.4f" % (m, a64, a32, ref, a64 - ref))
+
 print()
-print("largest deviation: %.1f sigma of the CPU seed spread" % worst)
-assert worst < 5.0, "GPU port deviates from the CPU reference"
-print("PORT VALIDATED")
+print("hardware/reduction-order effect (GPU f64 vs CPU f64): %.4f AUC"
+      % worst_hw)
+print("precision effect (f32 vs f64 on the same card):        %.4f AUC"
+      % worst_prec)
+assert worst_hw < 0.002, "GPU float64 does not reproduce the CPU reference"
+print()
+print("PORT VALIDATED - the float32 offset is precision, not a port bug"
+      if worst_prec < 0.005 else
+      "WARNING: float32 costs more than 0.005 AUC; run the campaign in f64")
 """),
         code("""
 # Checkpoint/resume on CUDA: interrupt, resume, compare per-epoch history.
@@ -320,8 +347,16 @@ print(subprocess.run(["nvidia-smi",
         code(RUNNER),
         code("""
 import glob, pathlib
-cands = glob.glob("/kaggle/input/*/top_tagging_train.npz")
-assert cands, "add the data-prep kernel's output as a data source"
+# The data-prep kernel wrote data/top_tagging_*.npz, so the mounted path is
+# one level deeper than /kaggle/input/<source>/ -- search recursively and
+# show what is actually mounted when nothing matches.
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+if not cands:
+    for root in sorted(glob.glob("/kaggle/input/*")):
+        print("mounted:", root)
+        for sub in sorted(glob.glob(root + "/**/*", recursive=True))[:20]:
+            print("   ", sub)
+    raise AssertionError("top_tagging_train.npz not found under /kaggle/input")
 DATA = str(pathlib.Path(cands[0]).parent)
 OUT = "/kaggle/working/results_scaling"
 CKPT = "/kaggle/working/checkpoints"
