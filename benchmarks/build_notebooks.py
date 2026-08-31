@@ -497,13 +497,15 @@ print("data:", DATA)
 """),
         code("""
 # Closed-form model first: it is cheap, so a failure surfaces early.
-for name, bs in (("so3c_covariant_set", "512"),
-                 ("so3c_interaction_set", "256")):
+import os
+SEEDS = ["1", "2"]
+for name, bs in (("so3c_covariant_set", "512"),):
     print("=== %s ===" % name)
-    run(["benchmarks.run_top_tagging",
+    for seed in SEEDS:
+      run(["benchmarks.run_top_tagging",
          "--cache-dir", DATA, "--representation", "constituents",
          "--canonical-splits", "--epochs", "30", "--normalize", "global",
-         "--seed", "0", "--device", "cuda", "--dtype", "float32",
+         "--seed", seed, "--device", "cuda", "--dtype", "float32",
          "--batch-size", bs, "--models", name,
          "--results-dir", OUT + "/" + name,
          "--ckpt-dir", CKPT + "/" + name, "--resume",
