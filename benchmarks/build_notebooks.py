@@ -135,19 +135,27 @@ subprocess.run([sys.executable, "-m", "pip", "-q", "install", "torchdiffeq"],
 """
 
 
-def build_dataprep(blob: str) -> None:
+def build_dataprep(blob: str, k: int = 32) -> None:
+    """Data-prep kernel for a given number of retained constituents.
+
+    K is the biggest lever we have: the K-sweep gave AUC 0.852 / 0.935 /
+    0.964 / 0.970 at K = 4 / 8 / 16 / 32 and had not saturated, while every
+    published model at 0.987 uses the full jet. A K=128 npz also serves
+    smaller K for free -- select_leading_constituents re-sorts and truncates
+    at load time, so --n-constituents 64 reads the same file.
+    """
     cells = [
         md("""
-# SO3C data prep - Top Tagging Reference to K=32 npz
+# SO3C data prep - Top Tagging Reference to K=%d npz
 
 CPU kernel: spends no GPU quota. Downloads the Kasieczka set from the
 HuggingFace mirror `dl4phys/top_tagging` - the same source the local CPU
 results came from - and converts it with the repo's own
-`download_top_tagging.py --n-constituents 32`.
+`download_top_tagging.py --n-constituents %d`.
 
-The set is not on Kaggle; this kernel's output becomes the data source for
-the scaling runs.
-"""),
+Sizes at K=%d: train %.1f GB raw before compression. Kaggle's working dir
+holds 20 GB, so this fits; the loader can still read any smaller K from it.
+""" % (k, k, k, 1211000 * k * 4 * 4 / 2 ** 30)),
         code(UNPACK.format(blob=blob)),
         code(RUNNER),
         code("""
@@ -157,7 +165,9 @@ subprocess.run([sys.executable, "-m", "pip", "-q", "install",
 import torch, numpy, pyarrow
 print("torch", torch.__version__, "numpy", numpy.__version__,
       "pyarrow", pyarrow.__version__)
-"""),
+K_KEEP = %d
+print("K_KEEP =", K_KEEP)
+""" % k),
         code("""
 from huggingface_hub import hf_hub_download
 import pathlib
@@ -172,7 +182,7 @@ for fn in ("train.parquet", "validation.parquet", "test.parquet"):
 ok = run(["benchmarks.download_top_tagging",
           "--cache-dir", "/kaggle/working/data",
           "--source-dir", "/kaggle/working/parquet",
-          "--skip-download", "--n-constituents", "32"])
+          "--skip-download", "--n-constituents", str(K_KEEP)])
 assert ok, "conversion failed"
 """),
         code("""
@@ -184,17 +194,18 @@ for split, n_exp in EXPECTED.items():
     pt = np.sqrt(c[:, :, 1] ** 2 + c[:, :, 2] ** 2)
     m2 = c[:, :, 0] ** 2 - (c[:, :, 1:] ** 2).sum(-1)
     monotone = bool((np.diff(pt, axis=1) <= 1e-3).all())
+    nz = (np.abs(c).sum(-1) > 0).sum(1)
     print(split, c.shape, "signal=%.3f" % y.mean(),
-          "pT-ordered=%s" % monotone, "max|m2|=%.2e" % np.abs(m2).max())
-    assert c.shape == (n_exp, 32, 4), "%s: wrong shape" % split
+          "pT-ordered=%s" % monotone, "max|m2|=%.2e" % np.abs(m2).max(),
+          "| real constituents: mean %.1f max %d" % (nz.mean(), nz.max()))
+    assert c.shape == (n_exp, K_KEEP, 4), "%s: wrong shape" % split
     assert monotone and abs(y.mean() - 0.5) < 0.01
 shutil.rmtree("/kaggle/working/parquet", ignore_errors=True)
 shutil.rmtree("/kaggle/working/repo", ignore_errors=True)
-print("OK - npz verified; this kernel's output feeds the scaling runs")
+print("OK - npz verified")
 """),
     ]
-    _finalise(cells, NB_DIR / "kaggle_dataprep.ipynb")
-
+    _finalise(cells, NB_DIR / ("kaggle_dataprep_k%d.ipynb" % k))
 
 
 def build_validate(blob: str) -> None:
@@ -529,13 +540,107 @@ shutil.rmtree("/kaggle/working/repo", ignore_errors=True)
     _finalise(cells, NB_DIR / "kaggle_fixed.ipynb")
 
 
+def build_kappa(blob: str) -> None:
+    """Tier-1 item 1: does raising K past 32 still buy AUC?
+
+    The K-sweep at K = 4/8/16/32 gave 0.852/0.935/0.964/0.970 and had not
+    flattened, and every published model at 0.987 keeps the whole jet. This
+    is the largest single lever in the revised plan.
+
+    Cost is O(K^2) in both the covariant connection and the pooled readout:
+    K=32 took 0.53 h/seed, so K=64 is ~2 h and K=128 ~8.5 h against a 9 h
+    session cap. Hence K=64 runs first (it settles the question cheaply) and
+    K=128 carries --max-seconds so it checkpoints and can resume in a second
+    session rather than dying at the cap.
+
+    Memory: train_classifier puts the whole train split on the card --
+    (1.211M, 128, 5) float32 is 3.1 GB, plus 1.0 GB val -- and the readout
+    holds a (B, K, K) complex matrix per channel, 67 MB at B=512/K=128. Batch
+    is stepped down accordingly.
+    """
+    cells = [
+        md("""
+# K sweep: 32 -> 64 -> 128
+
+`so3c_covariant_set` at K=32 scores 0.9746 +- 0.0001 on this protocol. The
+question is whether the truncation to 32 constituents, not the architecture,
+is what separates us from the 0.987 published models.
+"""),
+        code("""
+import torch, subprocess
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader"], capture_output=True,
+                     text=True).stdout.strip())
+"""),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code(GPU_SETUP),
+        code("""
+import glob, pathlib
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+assert cands, "attach the K=128 data-prep kernel output"
+DATA = str(pathlib.Path(cands[0]).parent)
+OUT = "/kaggle/working/results_kappa"
+CKPT = "/kaggle/working/checkpoints"
+import numpy as np
+d = np.load(DATA + "/top_tagging_train.npz", mmap_mode="r")
+print("data:", DATA, "stored K =", d["constituents"].shape[1])
+"""),
+        code("""
+# K=64 first: ~2 h, and it already answers the question.
+run(["benchmarks.run_top_tagging",
+     "--cache-dir", DATA, "--representation", "constituents",
+     "--canonical-splits", "--epochs", "30", "--normalize", "global",
+     "--seed", "0", "--device", "cuda", "--dtype", "float32",
+     "--batch-size", "256", "--n-constituents", "64",
+     "--models", "so3c_covariant_set",
+     "--results-dir", OUT + "/k64", "--ckpt-dir", CKPT + "/k64",
+     "--resume", "--max-seconds", "26000"])
+"""),
+        code("""
+import json, pathlib
+f = OUT + "/k64/top_tagging_canonical__so3c_covariant_set__seed0.json"
+if pathlib.Path(f).is_file():
+    t = json.load(open(f))["test_metrics"]
+    print("K=64:  AUC %.4f  rej %.0f   (K=32 reference: 0.9746 / 312)"
+          % (t["test_auc"], t["bg_rej_30"]))
+"""),
+        code("""
+# K=128: ~8.5 h against a 9 h cap, so it checkpoints. Rerun this cell in a
+# fresh session to continue; --resume picks up mid-training.
+run(["benchmarks.run_top_tagging",
+     "--cache-dir", DATA, "--representation", "constituents",
+     "--canonical-splits", "--epochs", "30", "--normalize", "global",
+     "--seed", "0", "--device", "cuda", "--dtype", "float32",
+     "--batch-size", "128", "--n-constituents", "128",
+     "--models", "so3c_covariant_set",
+     "--results-dir", OUT + "/k128", "--ckpt-dir", CKPT + "/k128",
+     "--resume", "--max-seconds", "26000"])
+"""),
+        code("""
+import json, glob, pathlib
+print("%-8s%9s%9s%10s%8s" % ("K", "params", "AUC", "rej@0.3", "hours"))
+print("%-8s%9d%9.4f%10.0f%8.2f" % (32, 9078, 0.9746, 312, 0.53))
+for f in sorted(glob.glob(OUT + "/*/*.json")):
+    r = json.load(open(f))
+    t = r["test_metrics"]
+    k = pathlib.Path(f).parent.name.lstrip("k")
+    print("%-8s%9d%9.4f%10.0f%8.2f"
+          % (k, r["n_params"], t["test_auc"], t["bg_rej_30"],
+             r["walltime_sec"] / 3600))
+"""),
+    ]
+    _finalise(cells, NB_DIR / "kaggle_kappa.ipynb")
+
+
 def main() -> int:
     blob = embed_code()
     print("embedded code: %.0f KB base64" % (len(blob) / 1024))
-    build_dataprep(blob)
+    build_dataprep(blob, k=128)
     build_validate(blob)
     build_scaling(blob)
     build_fixed(blob)
+    build_kappa(blob)
     return 0
 
 
