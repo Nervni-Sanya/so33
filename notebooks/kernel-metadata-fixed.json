@@ -1,0 +1,15 @@
+{
+  "id": "nsanya/so3c-fixed-canonical",
+  "title": "SO3C fixed canonical",
+  "code_file": "kaggle_fixed.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [
+    "nsanya/so3c-data-prep-top-tagging-k-32"
+  ]
+}

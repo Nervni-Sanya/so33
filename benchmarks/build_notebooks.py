@@ -454,12 +454,86 @@ print("done")
     _finalise(cells, NB_DIR / "kaggle_scaling.ipynb")
 
 
+def build_fixed(blob: str) -> None:
+    """Canonical runs for the two genuinely equivariant flow models."""
+    cells = [
+        md("""
+# Canonical: the two genuinely equivariant flow models
+
+`so3c_equivariant_set` turned out not to be Lorentz-invariant once trained:
+its connection is a function of invariants, so it does not rotate with the
+data. Under a rapidity-2 boost a trained model loses 0.095 AUC.
+
+Two models keep the symmetry with a live flow, and neither has been run on
+canonical data:
+
+* `so3c_covariant_set` - connection a_a = z_a x sum_b phi(inv) z_b. The
+  cross product is covariant for SO(3,C), so a -> Qa and the flow
+  conjugates correctly. Closed-form, no solver.
+* `so3c_interaction_set` - connection from particle bivectors, integrated
+  with dopri5. Equivariant to solver tolerance.
+
+On 20k jets, 8 epochs, the covariant model is both exactly flat under
+boosts and the most accurate of the three (0.9565 vs 0.9516 for the
+no-flow invariant model and 0.9424 for the broken one).
+"""),
+        code("""
+import torch, subprocess
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader"], capture_output=True,
+                     text=True).stdout.strip())
+"""),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code(GPU_SETUP),
+        code("""
+import glob, pathlib
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+assert cands, "attach the data-prep kernel output"
+DATA = str(pathlib.Path(cands[0]).parent)
+OUT = "/kaggle/working/results_fixed"
+CKPT = "/kaggle/working/checkpoints"
+print("data:", DATA)
+"""),
+        code("""
+# Closed-form model first: it is cheap, so a failure surfaces early.
+for name, bs in (("so3c_covariant_set", "512"),
+                 ("so3c_interaction_set", "256")):
+    print("=== %s ===" % name)
+    run(["benchmarks.run_top_tagging",
+         "--cache-dir", DATA, "--representation", "constituents",
+         "--canonical-splits", "--epochs", "30", "--normalize", "global",
+         "--seed", "0", "--device", "cuda", "--dtype", "float32",
+         "--batch-size", bs, "--models", name,
+         "--results-dir", OUT + "/" + name,
+         "--ckpt-dir", CKPT + "/" + name, "--resume",
+         "--max-seconds", "26000"])
+"""),
+        code("""
+import json, glob, pathlib, shutil
+print("%-26s%9s%9s%10s%8s" % ("model", "params", "AUC", "rej@0.3", "hours"))
+for f in sorted(glob.glob(OUT + "/*/*.json")):
+    r = json.load(open(f))
+    t = r["test_metrics"]
+    print("%-26s%9d%9.4f%10.0f%8.2f"
+          % (r["model"], r["n_params"], t["test_auc"], t["bg_rej_30"],
+             r["walltime_sec"] / 3600))
+print()
+print("CPU reference: so3c_equivariant_set (not invariant) 0.9743 / 320")
+print("               so3c_invariant_set  (no flow)        0.9689 / 183")
+shutil.rmtree("/kaggle/working/repo", ignore_errors=True)
+"""),
+    ]
+    _finalise(cells, NB_DIR / "kaggle_fixed.ipynb")
+
+
 def main() -> int:
     blob = embed_code()
     print("embedded code: %.0f KB base64" % (len(blob) / 1024))
     build_dataprep(blob)
     build_validate(blob)
     build_scaling(blob)
+    build_fixed(blob)
     return 0
 
 

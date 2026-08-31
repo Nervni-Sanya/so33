@@ -270,6 +270,54 @@ def test_interaction_set_is_equivariant_when_excited() -> None:
     print(f"  ✓ so3c_interaction_set equivariant with a live flow ({err:.1e})")
 
 
+def test_covariant_set_is_equivariant_when_excited() -> None:
+    """The repair: a connection built from cross products stays covariant.
+
+    a_a = z_a x sum_b phi(invariants) z_b transforms as a -> Q a, because
+    the cross product is covariant for SO(3, C) (det Q = 1) and the weights
+    are invariants. Then exp(-T [Qa]_x)(Q z) = Q exp(-T [a]_x) z exactly.
+
+    Contrast with test_trained_regime_invariance, where the same flow fed by
+    a NON-covariant connection shifts the logits by ~3.6e-3. Trained on
+    20k jets the two differ sharply under a rapidity-2 boost: the broken
+    model drops 0.095 AUC, this one drops 0.0000 and is more accurate
+    besides (0.9565 vs 0.9424).
+
+    The reference vector must be an invariant-WEIGHTED sum: the plain total
+    vanishes for this lift, since every z_b shares the leg P and
+    sum_b bivec(p_b, P) = bivec(P, P) = 0.
+    """
+    from benchmarks.models import build_model
+    from so3c.lift import random_lorentz_pair
+
+    gen = torch.Generator().manual_seed(21)
+    x = _random_jets(6, 12, gen)
+
+    torch.manual_seed(7)
+    m = build_model("so3c_covariant_set", in_features=4, out_features=2,
+                    representation="constituents")
+    m.eval()
+    torch.manual_seed(7)
+    identity = build_model("so3c_covariant_set", in_features=4, out_features=2,
+                           representation="constituents").eval()
+    with torch.no_grad():
+        m.phi[-1].weight.normal_(0, 0.5, generator=gen)
+        m.phi[-1].bias.normal_(0, 0.5, generator=gen)
+        # The flow must actually do something, or equivariance is vacuous.
+        moved = (m(x) - identity(x)).abs().max().item()
+    assert moved > 1e-2, f"flow is inert, test would be vacuous: {moved:.2e}"
+
+    for boost in (0.5, 1.0, 2.0):
+        L, _ = random_lorentz_pair(rot_scale=1.0, boost_scale=boost,
+                                   generator=gen)
+        x_t = torch.cat([x[..., :4] @ L.T, x[..., 4:]], dim=-1)
+        with torch.no_grad():
+            err = (m(x_t) - m(x)).abs().max().item()
+        assert err < 1e-6, f"covariant model lost equivariance at {boost}: {err:.2e}"
+        print(f"  ✓ so3c_covariant_set equivariant at boost {boost} ({err:.1e})")
+    print(f"    (flow displaces logits by {moved:.2f}, so this is not vacuous)")
+
+
 if __name__ == "__main__":
     print("\n── so3c benchmark-model tests ──")
     test_generator_invariants()
@@ -280,4 +328,5 @@ if __name__ == "__main__":
     test_set_lorentz_invariance()
     test_trained_regime_invariance()
     test_interaction_set_is_equivariant_when_excited()
+    test_covariant_set_is_equivariant_when_excited()
     print("All so3c model tests passed.\n")

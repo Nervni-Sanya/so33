@@ -83,12 +83,14 @@ SET_MODELS = (
     "so3c_invariant_set",    # bivector-lift complex invariants (so3c Arch A)
     "so3c_equivariant_set",  # + channel lift & geodesic flow (so3c Arch B)
     "so3c_interaction_set",  # + SO3CInteraction multi-particle ODE flow
+    "so3c_covariant_set",    # flow with a COVARIANT connection (the fix)
 )
 # The so3c set family (subset of SET_MODELS, dispatched in _build_deepsets).
 SO3C_SET_MODELS = (
     "so3c_invariant_set",
     "so3c_equivariant_set",
     "so3c_interaction_set",
+    "so3c_covariant_set",
 )
 ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS + SET_MODELS
 
@@ -513,6 +515,7 @@ def _build_deepsets(
         # the raw (B, K, 5) constituents directly (their lift is internal),
         # so none of the so33 kwargs (T, bound_input, solver) apply.
         from benchmarks.so3c_models import (
+            SO3CCovariantSetClassifier,
             SO3CEquivariantSetClassifier,
             SO3CInteractionSetClassifier,
             SO3CInvariantSetClassifier,
@@ -529,6 +532,9 @@ def _build_deepsets(
         if name == "so3c_equivariant_set":
             return SO3CEquivariantSetClassifier(out_features=out_features,
                                                 dtype=dtype, **extra)
+        if name == "so3c_covariant_set":
+            return SO3CCovariantSetClassifier(out_features=out_features,
+                                              dtype=dtype, **extra)
         extra.pop("channels", None)          # interaction model is single-channel
         extra.pop("act_hidden", None)
         return SO3CInteractionSetClassifier(out_features=out_features,

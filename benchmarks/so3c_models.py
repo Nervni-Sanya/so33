@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 
 from so3c.activation import SO3CActivation
-from so3c.algebra import invariant_features, real_to_complex
+from so3c.algebra import expm_so3c, invariant_features, real_to_complex
 from so3c.interaction import SO3CInteraction
 from so3c.lift import jet_bivectors, minkowski_inner
 
@@ -349,6 +349,138 @@ class SO3CInteractionSetClassifier(nn.Module):
 
     def regularization_loss(self) -> torch.Tensor:
         return self.interaction.regularization_loss()
+
+
+class SO3CCovariantSetClassifier(nn.Module):
+    """Equivariant flow whose connection is built COVARIANTLY.
+
+    Why the previous design failed
+    ------------------------------
+    SO3CEquivariantSetClassifier feeds SO3CActivation, whose connection
+    a(s) is a function of invariants. Under z -> Qz the invariants do not
+    move, so a does not move -- but equivariance needs a -> Qa. The flow
+    then applies the same rotation in the new frame instead of the
+    conjugated one. Per-particle invariants survive (an antisymmetric
+    connection conserves z.z) but the pairwise z_a.z_b terms the readout
+    reads do not, and a trained model loses 0.095 AUC under a rapidity-2
+    boost.
+
+    Why a single particle cannot be fixed
+    -------------------------------------
+    The only covariant vector available from one state z is z itself (times
+    any function of invariants), and [z]_x z = z x z = 0. Rotating about
+    your own axis is the identity, so a genuinely equivariant flow MUST be
+    multi-particle. There is no single-particle repair.
+
+    The construction
+    ----------------
+    The cross product is covariant for SO(3, C): Q(z_a x z_b) =
+    (Q z_a) x (Q z_b), since det Q = 1. Weighting it by invariants keeps
+    that, so
+
+        a_a = z_a  x  sum_b phi(s_aa, s_bb, s_ab) z_b
+
+    transforms as a_a -> Q a_a, and therefore
+
+        exp(-T [Q a]_x) (Q z) = Q exp(-T [a]_x) z
+
+    exactly. Note the reference vector must be an invariant-WEIGHTED sum:
+    the plain total sum_b z_b vanishes identically for this lift, because
+    every z_b shares the leg P and sum_b bivec(p_b, P) = bivec(P, P) = 0.
+
+    The connection is evaluated once at t = 0 and held fixed, so the flow
+    is a single closed-form group element (complex Rodrigues) rather than
+    an ODE solve -- equivariant, exact, and solver-free.
+
+    Channels differ in a way that matters here: each carries its own phi,
+    so each produces a different rotation. In the broken model channels
+    were complex scalar rescalings z_c = w_c z, which is a large part of
+    why adding them bought nothing (AUC flat to 0.0002 from 9k to 198k
+    parameters).
+    """
+
+    def __init__(
+        self,
+        out_features: int = 2,
+        channels: int = 4,
+        hidden: int = 64,
+        act_hidden: int = 16,
+        T: float = 1.0,
+        dtype: torch.dtype = torch.float64,
+    ) -> None:
+        super().__init__()
+        self.dtype = dtype
+        self.channels = channels
+        self.T = T
+        # phi: pairwise invariants -> one real coefficient per channel.
+        self.phi = nn.Sequential(
+            nn.Linear(6, act_hidden), nn.Tanh(),
+            nn.Linear(act_hidden, channels),
+        ).to(dtype)
+        nn.init.zeros_(self.phi[-1].weight)   # identity flow at init
+        nn.init.zeros_(self.phi[-1].bias)
+
+        n_ch_pairs = channels * (channels + 1) // 2
+        in_features = channels * 11 + 2 * n_ch_pairs + 7
+        self.mlp = nn.Sequential(
+            nn.Linear(in_features, hidden), nn.ReLU(),
+            nn.Linear(hidden, hidden), nn.ReLU(),
+            nn.Linear(hidden, out_features),
+        ).to(dtype)
+        iu = torch.triu_indices(channels, channels)
+        self.register_buffer("pair_rows", iu[0])
+        self.register_buffer("pair_cols", iu[1])
+
+    def _connection(self, z: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """(B, K, 3) complex -> (B, C, K, 3) complex covariant connections."""
+        S = z @ z.transpose(-1, -2)                          # (B, K, K)
+        s_diag = torch.diagonal(S, dim1=-2, dim2=-1)         # (B, K)
+        B, K = s_diag.shape
+        feats = torch.stack([
+            s_diag.real.unsqueeze(-1).expand(B, K, K),
+            s_diag.imag.unsqueeze(-1).expand(B, K, K),
+            s_diag.real.unsqueeze(-2).expand(B, K, K),
+            s_diag.imag.unsqueeze(-2).expand(B, K, K),
+            S.real, S.imag,
+        ], dim=-1)
+        phi = self.phi(torch.asinh(feats))                   # (B, K, K, C)
+        pair_mask = (mask.unsqueeze(-1) * mask.unsqueeze(-2)).unsqueeze(-1)
+        phi = phi * pair_mask
+        n = mask.sum(-1).clamp_min(1.0)[:, None, None, None]
+
+        # Reference vector per (channel, particle): an invariant-weighted
+        # sum of the other states. Covariant because the weights are
+        # invariants and the sum is over a covariant object.
+        ref = torch.einsum("bklc,bld->bckd", phi.to(z.real.dtype), z.real)             + 1j * torch.einsum("bklc,bld->bckd", phi.to(z.real.dtype), z.imag)
+        ref = ref / n
+        zc = z.unsqueeze(1).expand(-1, self.channels, -1, -1)   # (B, C, K, 3)
+        return torch.linalg.cross(zc, ref, dim=-1)              # covariant
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(self.dtype)
+        p4, mask = x[..., :4], x[..., 4]
+        z = jet_bivectors(p4, mask)                          # (B, K, 3)
+        a = self._connection(z, mask)                        # (B, C, K, 3)
+
+        B, C, K, _ = a.shape
+        Q = expm_so3c(a.reshape(-1, 3), t=-self.T)           # (B*C*K, 3, 3)
+        zc = z.unsqueeze(1).expand(-1, C, -1, -1).reshape(-1, 3, 1)
+        zc = (Q @ zc).squeeze(-1).reshape(B, C, K, 3)
+
+        per_ch = torch.stack(
+            [_pooled_bivector_invariants(zc[:, c], mask) for c in range(C)],
+            dim=1).reshape(B, C * 11)
+        z_tot = (zc * mask[:, None, :, None]).sum(dim=2)     # (B, C, 3)
+        T_cc = z_tot @ z_tot.transpose(-1, -2)
+        T_pairs = T_cc[:, self.pair_rows, self.pair_cols]
+        cross = torch.cat([torch.asinh(T_pairs.real),
+                           torch.asinh(T_pairs.imag)], dim=-1)
+        return self.mlp(torch.cat(
+            [per_ch, cross, _minkowski_stats(p4, mask)], dim=-1))
+
+    def regularization_loss(self) -> torch.Tensor:
+        last = self.phi[-1]
+        return 1e-3 * (last.weight.pow(2).sum() + last.bias.pow(2).sum())
 
 
 class MultiChannelSO3C(nn.Module):
