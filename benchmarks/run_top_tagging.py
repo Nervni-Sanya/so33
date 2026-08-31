@@ -97,6 +97,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--resume", action="store_true",
                    help="Resume interrupted training and skip models whose "
                         "result JSON already exists.")
+    p.add_argument("--eval-chunk-size", type=int, default=4096,
+                   help="Jets per forward pass at eval time. The pairwise "
+                        "readout holds a (chunk, K, K, hidden) tensor, which "
+                        "grows as K^2: 4096 costs 268 MB at K=32 but 4.3 GB "
+                        "at K=128. Scale it down as K goes up.")
     p.add_argument("--max-seconds", type=float, default=None,
                    help="Checkpoint and stop before a session cap (Kaggle "
                         "kills a notebook at 12h).")
@@ -156,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
         ckpt_dir=args.ckpt_dir,
         resume=args.resume,
         max_seconds=args.max_seconds,
+        eval_chunk_size=args.eval_chunk_size,
     )
     if models is not None:
         kwargs["models"] = models

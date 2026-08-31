@@ -613,6 +613,10 @@ run(["benchmarks.run_top_tagging",
      "--canonical-splits", "--epochs", "30", "--normalize", "global",
      "--seed", "0", "--device", "cuda", "--dtype", "float32",
      "--batch-size", "128", "--n-constituents", "128",
+     # The eval chunk, not the training batch, is what ran the card out of
+     # memory at K=128: the readout holds (chunk, K, K, hidden), which is
+     # 268 MB at K=32/chunk=4096 but 4.3 GB at K=128.
+     "--eval-chunk-size", "256",
      "--models", "so3c_covariant_set",
      "--results-dir", OUT + "/k128", "--ckpt-dir", CKPT + "/k128",
      "--resume", "--max-seconds", "26000"])
