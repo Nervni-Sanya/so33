@@ -214,8 +214,26 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.cmd == "wait":
             deadline = time.time() + args.timeout
+            transient = 0
             while time.time() < deadline:
-                st = kernel_status(args.slug)
+                # A dropped poll says nothing about the kernel: it runs
+                # server-side and is unaffected by our connectivity. Losing
+                # the whole wait to one flaky request has cost hours of
+                # unattended runs, so transient failures are absorbed and
+                # only a long unbroken streak is treated as fatal.
+                try:
+                    st = kernel_status(args.slug)
+                    transient = 0
+                except KaggleError as e:
+                    transient += 1
+                    print(f"  [{time.strftime('%H:%M:%S')}] poll failed "
+                          f"({transient}): {str(e)[:80]}")
+                    if transient >= 20:
+                        print("  giving up on polling; the kernel may still "
+                              "be running - check with `status`")
+                        return 1
+                    time.sleep(args.interval)
+                    continue
                 status = st.get("status", "?")
                 print(f"  [{time.strftime('%H:%M:%S')}] {status}"
                       f"{' — ' + st['failureMessage'] if st.get('failureMessage') else ''}")
