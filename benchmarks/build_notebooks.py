@@ -619,6 +619,55 @@ for f in sorted(glob.glob(OUT + "/*/*.json")):
     _finalise(cells, NB_DIR / "kaggle_kappa.ipynb")
 
 
+def build_k64_seed(blob: str, seed: int = 1) -> None:
+    """One extra seed at K=64, the operating point the sweep settled on.
+
+    K = 32 / 64 / 128 gave AUC 0.9746 / 0.9772 / 0.9781 and rejection
+    312 / 637 / 639. Everything worth having arrives by K=64: doubling to
+    128 buys +0.0009 AUC and nothing in rejection for 3.6x the wall clock.
+    """
+    cells = [
+        md("""
+# SO3C K=64, extra seed
+
+K=64 is the operating point: the 32 -> 64 step doubled background rejection
+(312 -> 637) while 64 -> 128 added nothing (639) at 3.6x the cost. This run
+adds a seed so the number carries an error bar.
+"""),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code(GPU_SETUP),
+        code("""
+import glob, pathlib
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+assert cands, "attach the K=128 data-prep kernel output"
+DATA = str(pathlib.Path(cands[0]).parent)
+OUT = "/kaggle/working/results_k64"
+print("data:", DATA)
+"""),
+        code("""
+run(["benchmarks.run_top_tagging",
+     "--cache-dir", DATA, "--representation", "constituents",
+     "--canonical-splits", "--epochs", "30", "--normalize", "global",
+     "--seed", "%d", "--device", "cuda", "--dtype", "float32",
+     "--batch-size", "256", "--n-constituents", "64",
+     "--eval-chunk-size", "1024",
+     "--models", "so3c_covariant_set",
+     "--results-dir", OUT, "--ckpt-dir", "/kaggle/working/ckpt",
+     "--resume", "--max-seconds", "9000"])
+""" % seed),
+        code("""
+import json, glob
+for f in sorted(glob.glob(OUT + "/*.json")):
+    r = json.load(open(f)); t = r["test_metrics"]
+    print("seed %d: AUC %.4f  rej %.0f  (seed 0: 0.9772 / 637)"
+          % (r["seed"], t["test_auc"], t["bg_rej_30"]))
+"""),
+    ]
+    _finalise(cells, NB_DIR / ("kaggle_k64_seed%d.ipynb" % seed))
+
+
+
 def main() -> int:
     blob = embed_code()
     print("embedded code: %.0f KB base64" % (len(blob) / 1024))
@@ -626,6 +675,7 @@ def main() -> int:
     build_validate(blob)
     build_scaling(blob)
     build_fixed(blob)
+    build_k64_seed(blob, seed=1)
     build_kappa(blob)
     return 0
 
