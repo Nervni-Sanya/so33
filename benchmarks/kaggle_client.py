@@ -209,7 +209,21 @@ def main(argv: list[str] | None = None) -> int:
                     print("aborted")
                     return 1
             resp = push_kernel(args.metadata, args.notebook)
-            print(f"pushed: {resp.get('url', resp)}")
+            url = resp.get("url", "")
+            print(f"pushed: {url or resp}")
+            # Kaggle derives the slug from the TITLE and ignores the "id" we
+            # send, so metadata["id"] is not what the kernel is called. Polling
+            # the wrong slug returns HTTP 403 ("Permission kernels.get was
+            # denied"), which reads like an auth failure and cost 100 minutes
+            # of retries against a name that never existed. Print the real one.
+            if url:
+                real = "/".join(url.rstrip("/").split("/")[-2:])
+                meta_id = meta["id"] if isinstance(meta, dict) else ""
+                print(f"slug:   {real}")
+                if meta_id and real != meta_id:
+                    print(f"  NOTE: differs from metadata id {meta_id!r} - "
+                          f"Kaggle slugified the title. Use the slug above "
+                          f"for status/wait/fetch.")
             return 0
 
         if args.cmd == "wait":
