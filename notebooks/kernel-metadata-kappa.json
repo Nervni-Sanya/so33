@@ -1,6 +1,6 @@
 {
-  "id": "nsanya/so3c-kappa-sweep",
-  "title": "SO3C K sweep",
+  "id": "nsanya/so3c-k128",
+  "title": "SO3C constituents K128",
   "code_file": "kaggle_kappa.ipynb",
   "language": "python",
   "kernel_type": "notebook",

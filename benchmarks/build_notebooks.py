@@ -587,25 +587,6 @@ d = np.load(DATA + "/top_tagging_train.npz", mmap_mode="r")
 print("data:", DATA, "stored K =", d["constituents"].shape[1])
 """),
         code("""
-# K=64 first: ~2 h, and it already answers the question.
-run(["benchmarks.run_top_tagging",
-     "--cache-dir", DATA, "--representation", "constituents",
-     "--canonical-splits", "--epochs", "30", "--normalize", "global",
-     "--seed", "0", "--device", "cuda", "--dtype", "float32",
-     "--batch-size", "256", "--n-constituents", "64",
-     "--models", "so3c_covariant_set",
-     "--results-dir", OUT + "/k64", "--ckpt-dir", CKPT + "/k64",
-     "--resume", "--max-seconds", "26000"])
-"""),
-        code("""
-import json, pathlib
-f = OUT + "/k64/top_tagging_canonical__so3c_covariant_set__seed0.json"
-if pathlib.Path(f).is_file():
-    t = json.load(open(f))["test_metrics"]
-    print("K=64:  AUC %.4f  rej %.0f   (K=32 reference: 0.9746 / 312)"
-          % (t["test_auc"], t["bg_rej_30"]))
-"""),
-        code("""
 # K=128: ~8.5 h against a 9 h cap, so it checkpoints. Rerun this cell in a
 # fresh session to continue; --resume picks up mid-training.
 run(["benchmarks.run_top_tagging",
@@ -625,6 +606,7 @@ run(["benchmarks.run_top_tagging",
 import json, glob, pathlib
 print("%-8s%9s%9s%10s%8s" % ("K", "params", "AUC", "rej@0.3", "hours"))
 print("%-8s%9d%9.4f%10.0f%8.2f" % (32, 9078, 0.9746, 312, 0.53))
+print("%-8s%9d%9.4f%10.0f%8.2f" % (64, 9078, 0.9772, 637, 1.66))
 for f in sorted(glob.glob(OUT + "/*/*.json")):
     r = json.load(open(f))
     t = r["test_metrics"]
