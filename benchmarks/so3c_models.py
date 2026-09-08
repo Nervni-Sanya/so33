@@ -483,6 +483,258 @@ class SO3CCovariantSetClassifier(nn.Module):
         return 1e-3 * (last.weight.pow(2).sum() + last.bias.pow(2).sum())
 
 
+class SO3CMessageSetClassifier(nn.Module):
+    """Covariant message passing: several rounds of the SO3CCovariantSet
+    connection, with a scalar channel running alongside the vector one.
+
+    The single-round covariant model has one bottleneck the readout cannot
+    work around: every bit of information about a constituent travels
+    through three complex numbers. Real Lorentz-equivariant taggers
+    (LorentzNet's LGEB, PELICAN) carry a *scalar* embedding beside the
+    vector and update both, several times. This is that construction on the
+    so3c algebra.
+
+    Per round, for particles a, b and channel c:
+
+        e_ab   = MLP([Re/Im z_a.z_b, Re/Im z_a.z_a, Re/Im z_b.z_b, h_a, h_b])
+        h_a   <- h_a + MLP([h_a, mean_b msg(e_ab)])            (invariant)
+        ref_a  = mean_b w_c(e_ab) z_b                          (covariant)
+        z_a   <- exp(-T [z_a x ref_a]_x) z_a                   (covariant)
+        z     <- M z                                           (covariant)
+
+    Equivariance holds round by round and therefore end to end:
+
+    * every edge feature is a bilinear invariant z.z or a scalar h, so the
+      weights w_c and messages are invariant -- they do not move under
+      z -> Qz;
+    * an invariant-weighted sum of covariant vectors is covariant;
+    * the cross product is covariant for SO(3, C), since det Q = 1;
+    * exp(-T [Qa]_x) (Qz) = Q exp(-T [a]_x) z, because [Qa]_x = Q [a]_x Q^T;
+    * a constant complex channel mixing M commutes with Q, which is complex
+      linear.
+
+    The readout is the covariant model's, plus masked mean/max of the final
+    scalar states.
+
+    Bounding. exp of a complex generator is a boost as well as a rotation,
+    so the Hermitian norm |z| can grow without bound over rounds. It cannot
+    be normalised away: the only scalars available are the bilinear
+    invariants, and a null vector has z.z = 0 at arbitrary magnitude. What
+    IS available is an invariant soft bound -- divide by 1 + |z.z|^(1/2),
+    a function of invariants times a covariant vector -- applied to the
+    input lift and to each round's connection. Combined with the zero-init
+    weight head (identity flow at step 0) that has kept the rounds stable.
+
+    Sparsification. ``neighbors=k`` restricts messages to each particle's k
+    strongest partners, cutting the per-round cost from K^2 to K*k. The
+    ranking key is |Re(z_a . z_b)| on the input bivectors -- an INVARIANT,
+    so every jet keeps the same neighbour set in every frame and the graph
+    itself is equivariant. A key built from a frame-dependent quantity
+    (angular distance in the lab, pT ordering) would silently reshuffle
+    edges under a boost and break the symmetry with nothing to flag it. The
+    graph is built once from the input and reused across rounds; the states
+    rotate, but their pairwise invariants -- and hence the ranking -- are
+    only changed by the flow, not by the frame.
+    """
+
+    def __init__(
+        self,
+        out_features: int = 2,
+        channels: int = 4,
+        rounds: int = 3,
+        hidden: int = 64,
+        act_hidden: int = 16,
+        scalar_dim: int = 8,
+        msg_dim: int = 8,
+        T: float = 1.0,
+        channel_mixing: bool = True,
+        neighbors: int | None = None,
+        dtype: torch.dtype = torch.float64,
+    ) -> None:
+        super().__init__()
+        self.dtype = dtype
+        self.channels = channels
+        self.rounds = rounds
+        self.scalar_dim = scalar_dim
+        self.neighbors = neighbors
+        self.T = T
+
+        gen = torch.Generator().manual_seed(0)
+        w = torch.stack([
+            1.0 + 0.1 * torch.randn(channels, dtype=dtype, generator=gen),
+            0.1 * torch.randn(channels, dtype=dtype, generator=gen),
+        ], dim=-1)
+        self.channel_weights = nn.Parameter(w)                   # (C, 2)
+
+        # Scalar states are seeded from per-particle invariants only:
+        # Re/Im (z.z) and the Minkowski mass <p, p>.
+        self.h_init = nn.Linear(3, scalar_dim).to(dtype)
+
+        edge_in = 6 * channels + 2 * scalar_dim
+        self.edge = nn.ModuleList()
+        self.w_head = nn.ModuleList()
+        self.msg_head = nn.ModuleList()
+        self.node = nn.ModuleList()
+        for _ in range(rounds):
+            self.edge.append(nn.Sequential(
+                nn.Linear(edge_in, act_hidden), nn.Tanh()).to(dtype))
+            head = nn.Linear(act_hidden, channels).to(dtype)
+            nn.init.zeros_(head.weight)      # identity flow at init
+            nn.init.zeros_(head.bias)
+            self.w_head.append(head)
+            self.msg_head.append(nn.Linear(act_hidden, msg_dim).to(dtype))
+            self.node.append(nn.Sequential(
+                nn.Linear(scalar_dim + msg_dim, act_hidden), nn.ReLU(),
+                nn.Linear(act_hidden, scalar_dim)).to(dtype))
+
+        if channel_mixing:
+            mix = torch.zeros(rounds, channels, channels, 2, dtype=dtype)
+            mix[..., 0] = torch.eye(channels, dtype=dtype)       # identity init
+            self.mix = nn.Parameter(mix)
+        else:
+            self.register_parameter("mix", None)
+
+        n_ch_pairs = channels * (channels + 1) // 2
+        in_features = channels * 11 + 2 * n_ch_pairs + 2 * scalar_dim + 7
+        self.mlp = nn.Sequential(
+            nn.Linear(in_features, hidden), nn.ReLU(),
+            nn.Linear(hidden, hidden), nn.ReLU(),
+            nn.Linear(hidden, out_features),
+        ).to(dtype)
+        iu = torch.triu_indices(channels, channels)
+        self.register_buffer("pair_rows", iu[0])
+        self.register_buffer("pair_cols", iu[1])
+
+    @staticmethod
+    def _invariant_scale(v: torch.Tensor) -> torch.Tensor:
+        """1 + |v.v|^(1/2), an invariant soft bound. (..., 3) -> (...)."""
+        q = (v * v).sum(dim=-1)
+        return 1.0 + (q.real.pow(2) + q.imag.pow(2) + 1e-12).sqrt().sqrt()
+
+    def _neighbour_graph(self, z, mask):
+        """(B, K, 3), (B, K) -> neighbour indices (B, K, k) and their mask.
+
+        Ranked by the invariant |Re(z_a . z_b)|, self-edges excluded.
+        """
+        k = self.neighbors
+        S = (z @ z.transpose(-1, -2)).real.abs()                 # (B, K, K)
+        pair = mask.unsqueeze(-1) * mask.unsqueeze(-2)
+        eye = torch.eye(z.shape[1], dtype=pair.dtype, device=pair.device)
+        pair = pair * (1.0 - eye)
+        key = torch.where(pair.bool(), S, torch.full_like(S, -1.0))
+        val, idx = key.topk(k, dim=-1)                            # (B, K, k)
+        return idx, (val >= 0).to(z.real.dtype) * mask.unsqueeze(-1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(self.dtype)
+        p4, mask = x[..., :4], x[..., 4]
+        z = jet_bivectors(p4, mask)                              # (B, K, 3)
+        z = z / self._invariant_scale(z).unsqueeze(-1)
+
+        q = (z * z).sum(dim=-1)
+        m2 = minkowski_inner(p4, p4) * mask
+        h = self.h_init(torch.asinh(
+            torch.stack([q.real, q.imag, m2], dim=-1)))          # (B, K, D)
+        h = h * mask.unsqueeze(-1)
+
+        w = torch.complex(self.channel_weights[:, 0],
+                          self.channel_weights[:, 1])            # (C,)
+        zc = w[None, :, None, None] * z[:, None, :, :]           # (B, C, K, 3)
+
+        B, C, K, _ = zc.shape
+        D = self.scalar_dim
+        node_mask = mask.unsqueeze(-1)
+        sparse = self.neighbors is not None and self.neighbors < K
+        if sparse:
+            idx, edge_mask = self._neighbour_graph(z, mask)      # (B, K, k)
+            bat = torch.arange(B, device=z.device).view(B, 1, 1)
+            k = idx.shape[-1]
+            denom = edge_mask.sum(-1).clamp_min(1.0)             # (B, K)
+        else:
+            pair_mask = mask.unsqueeze(-1) * mask.unsqueeze(-2)  # (B, K, K)
+            denom = mask.sum(dim=-1).clamp_min(1.0).unsqueeze(-1).expand(B, K)
+
+        for r in range(self.rounds):
+            if sparse:
+                zp = zc.permute(0, 2, 1, 3)                      # (B, K, C, 3)
+                zb = zp[bat, idx]                                # (B, K, k, C, 3)
+                sd = (zp * zp).sum(dim=-1)                       # (B, K, C)
+                s_ab = (zp.unsqueeze(2) * zb).sum(dim=-1)        # (B, K, k, C)
+                row = sd.unsqueeze(2).expand(B, K, k, C)
+                col = sd[bat, idx]                               # (B, K, k, C)
+                hb = h[bat, idx]                                 # (B, K, k, D)
+                ha = h.unsqueeze(2).expand(B, K, k, D)
+                emask = edge_mask.unsqueeze(-1)
+            else:
+                S = zc @ zc.transpose(-1, -2)                    # (B, C, K, K)
+                sd = torch.diagonal(S, dim1=-2, dim2=-1).permute(0, 2, 1)
+                s_ab = S.permute(0, 2, 3, 1)                     # (B, K, K, C)
+                row = sd.unsqueeze(2).expand(B, K, K, C)
+                col = sd.unsqueeze(1).expand(B, K, K, C)
+                hb = h.unsqueeze(1).expand(B, K, K, D)
+                ha = h.unsqueeze(2).expand(B, K, K, D)
+                emask = pair_mask.unsqueeze(-1)
+
+            e = torch.cat([
+                torch.asinh(s_ab.real), torch.asinh(s_ab.imag),
+                torch.asinh(row.real), torch.asinh(row.imag),
+                torch.asinh(col.real), torch.asinh(col.imag),
+                ha, hb,
+            ], dim=-1)                                           # (B,K,*,6C+2D)
+
+            hid = self.edge[r](e)
+            wts = self.w_head[r](hid) * emask                    # (B, K, *, C)
+            msg = self.msg_head[r](hid) * emask                  # (B, K, *, M)
+
+            h = h + self.node[r](torch.cat(
+                [h, msg.sum(dim=2) / denom.unsqueeze(-1)], dim=-1))
+            h = h * node_mask
+
+            if sparse:
+                ref = torch.complex(
+                    torch.einsum("bakc,bakcx->bacx", wts, zb.real),
+                    torch.einsum("bakc,bakcx->bacx", wts, zb.imag),
+                ).permute(0, 2, 1, 3)                            # (B, C, K, 3)
+            else:
+                wc = wts.permute(0, 3, 1, 2)                     # (B, C, K, K)
+                ref = torch.complex(wc @ zc.real, wc @ zc.imag)
+            ref = ref / denom[:, None, :, None]
+            a = torch.linalg.cross(zc, ref, dim=-1)              # covariant
+            a = a / self._invariant_scale(a).unsqueeze(-1)
+
+            Q = expm_so3c(a.reshape(-1, 3), t=-self.T)           # (B*C*K, 3, 3)
+            zc = (Q @ zc.reshape(-1, 3, 1)).squeeze(-1).reshape(B, C, K, 3)
+            zc = zc * mask[:, None, :, None]
+
+            if self.mix is not None:
+                M = torch.complex(self.mix[r, ..., 0], self.mix[r, ..., 1])
+                zc = torch.einsum("cd,bdkx->bckx", M, zc)
+
+        per_ch = torch.stack(
+            [_pooled_bivector_invariants(zc[:, c], mask) for c in range(C)],
+            dim=1).reshape(B, C * 11)
+        z_tot = (zc * mask[:, None, :, None]).sum(dim=2)         # (B, C, 3)
+        T_cc = z_tot @ z_tot.transpose(-1, -2)
+        T_pairs = T_cc[:, self.pair_rows, self.pair_cols]
+        cross = torch.cat([torch.asinh(T_pairs.real),
+                           torch.asinh(T_pairs.imag)], dim=-1)
+
+        n = mask.sum(dim=-1).clamp_min(1.0)
+        h_mean = (h * node_mask).sum(dim=1) / n.unsqueeze(-1)
+        h_max = torch.where(node_mask.bool(), h,
+                            torch.full_like(h, -1e30)).amax(dim=1)
+        return self.mlp(torch.cat(
+            [per_ch, cross, h_mean, h_max, _minkowski_stats(p4, mask)],
+            dim=-1))
+
+    def regularization_loss(self) -> torch.Tensor:
+        loss = torch.zeros((), dtype=self.dtype,
+                           device=self.channel_weights.device)
+        for head in self.w_head:
+            loss = loss + head.weight.pow(2).sum() + head.bias.pow(2).sum()
+        return 1e-3 * loss
+
+
 class MultiChannelSO3C(nn.Module):
     """Multi-channel so3c block: C parallel Linear(in -> 6) + SO3CActivation,
     concatenated to 6*C, then Linear(6*C -> out). Mirror of MultiChannelSO33.

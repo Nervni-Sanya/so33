@@ -1,0 +1,15 @@
+{
+  "id": "nsanya/so3c-message-probe",
+  "title": "SO3C message probe",
+  "code_file": "kaggle_message_probe.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [
+    "nsanya/so3c-data-prep-k-128"
+  ]
+}

@@ -668,6 +668,193 @@ for f in sorted(glob.glob(OUT + "/*.json")):
 
 
 
+def build_message_probe(blob: str) -> None:
+    """Cheap head-to-head before committing a session to message passing.
+
+    A full canonical run of the dense 3-round model at K=64 is ~12 h by the
+    measured per-iteration cost (7.5x the covariant baseline's 1.66 h), so
+    it is worth ~1.4 h to find out first whether the architecture change
+    pays at all, and which part of it pays.
+
+    Same protocol for every row -- canonical splits, 400k train jets, 20
+    epochs, K=32 -- so the only difference is the model:
+
+      so3c_covariant_set          one covariant round, no scalar channel
+      so3c_message_set rounds=1   + the scalar channel, still one round
+      so3c_message_set rounds=3   + three rounds
+      so3c_message_set rounds=3, neighbors=16   the same, on a kNN graph
+
+    Row 2 minus row 1 isolates the scalar channel; row 3 minus row 2
+    isolates the extra rounds; row 4 against row 3 says what the kNN graph
+    costs in accuracy for what it saves in time. Truncating the training
+    set makes the absolute numbers lower than the canonical 0.9746, so read
+    the differences, not the levels.
+    """
+    common = [
+        "--cache-dir", "DATA", "--representation", "constituents",
+        "--canonical-splits", "--epochs", "20", "--normalize", "global",
+        "--max-train-samples", "400000",
+        "--seed", "0", "--device", "cuda", "--dtype", "float32",
+        "--batch-size", "256", "--n-constituents", "32",
+        "--eval-chunk-size", "2048",
+    ]
+    cells = [
+        md("""
+# Message passing: does it pay, and which half of it pays?
+
+`so3c_covariant_set` applies ONE covariant rotation and carries no scalar
+state. Published Lorentz-equivariant taggers do neither: LGEB and PELICAN
+run several rounds and keep a scalar embedding beside the vector. This
+probe adds the two things separately on a truncated protocol, so the full
+run is only paid for if the differences are real.
+"""),
+        code("""
+import torch, subprocess
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader"], capture_output=True,
+                     text=True).stdout.strip())
+"""),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code(GPU_SETUP),
+        code("""
+import glob, pathlib
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+assert cands, "attach the K=128 data-prep kernel output"
+DATA = str(pathlib.Path(cands[0]).parent)
+OUT = "/kaggle/working/results_probe"
+COMMON = %r
+COMMON[COMMON.index("DATA")] = DATA
+print("data:", DATA)
+""" % (common,)),
+        code("""
+run(["benchmarks.run_top_tagging"] + COMMON +
+    ["--models", "so3c_covariant_set", "--results-dir", OUT + "/covariant"])
+"""),
+        code("""
+# The scalar channel alone: one round, so the vector path matches the
+# baseline and the only addition is h.
+run(["benchmarks.run_top_tagging"] + COMMON +
+    ["--models", "so3c_message_set", "--rounds", "1",
+     "--results-dir", OUT + "/r1"])
+"""),
+        code("""
+run(["benchmarks.run_top_tagging"] + COMMON +
+    ["--models", "so3c_message_set", "--rounds", "3",
+     "--results-dir", OUT + "/r3"])
+"""),
+        code("""
+run(["benchmarks.run_top_tagging"] + COMMON +
+    ["--models", "so3c_message_set", "--rounds", "3", "--neighbors", "16",
+     "--results-dir", OUT + "/r3knn"])
+"""),
+        code("""
+import json, glob, pathlib
+print("%-10s%-22s%9s%9s%10s%8s"
+      % ("variant", "model", "params", "AUC", "rej@0.3", "hours"))
+for f in sorted(glob.glob(OUT + "/*/*.json")):
+    r = json.load(open(f)); t = r["test_metrics"]
+    print("%-10s%-22s%9d%9.4f%10.0f%8.2f"
+          % (pathlib.Path(f).parent.name, r["model"], r["n_params"],
+             t["test_auc"], t["bg_rej_30"], r["walltime_sec"] / 3600))
+"""),
+    ]
+    _finalise(cells, NB_DIR / "kaggle_message_probe.ipynb")
+
+
+def build_message(blob: str, seed: int = 0) -> None:
+    """Tier-2 item 5: covariant message passing at the K=64 operating point.
+
+    The single-round covariant model puts every constituent through three
+    complex numbers and one rotation. `so3c_message_set` runs the same
+    covariant connection three times and carries a per-particle scalar
+    channel alongside the vector one, which is what LGEB/PELICAN do and
+    what our architecture has been missing.
+
+    Cost. The per-round edge MLP reads 6C + 2D = 40 features per pair
+    against the single-round model's 6, so a dense run is ~7.6x the
+    covariant baseline -- 12 h at K=64, past any single session. The kNN
+    graph (--neighbors 16) cuts the edge count from K^2 = 4096 to K*k =
+    1024 and brings it back to ~2x, i.e. ~3.5 h. The ranking key is the
+    invariant |Re z_a.z_b|, so the graph is the same in every frame and
+    equivariance survives (tests/test_so3c_models.py).
+
+    The smoke cell runs 1 epoch on 20k jets first: it costs ~2 minutes and
+    catches an OOM or a shape error before the session commits hours.
+    """
+    cells = [
+        md("""
+# Covariant message passing (K=64)
+
+`so3c_covariant_set` at K=64 scores AUC 0.9772 +- 0.0001 with background
+rejection 638 +- 1 (2 seeds, 9078 params). This run asks whether the
+architecture is limited by having only ONE round of covariant mixing and no
+scalar channel -- the two things every published Lorentz-equivariant tagger
+has that we do not.
+
+The model stays exactly equivariant: the graph is ranked by an invariant,
+the messages are invariants, the connection is a cross product of covariant
+vectors, and the channel mixing is complex-linear.
+"""),
+        code("""
+import torch, subprocess
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader"], capture_output=True,
+                     text=True).stdout.strip())
+"""),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code(GPU_SETUP),
+        code("""
+import glob, pathlib
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+assert cands, "attach the K=128 data-prep kernel output"
+DATA = str(pathlib.Path(cands[0]).parent)
+OUT = "/kaggle/working/results_message"
+CKPT = "/kaggle/working/checkpoints"
+print("data:", DATA)
+"""),
+        code("""
+# Smoke: 1 epoch on 20k jets. Catches an OOM or a shape error in ~2 min,
+# before the session commits hours to the real run.
+run(["benchmarks.run_top_tagging",
+     "--cache-dir", DATA, "--representation", "constituents",
+     "--canonical-splits", "--epochs", "1", "--normalize", "global",
+     "--max-train-samples", "20000",
+     "--seed", "0", "--device", "cuda", "--dtype", "float32",
+     "--batch-size", "256", "--n-constituents", "64",
+     "--rounds", "3", "--neighbors", "16",
+     "--eval-chunk-size", "1024",
+     "--models", "so3c_message_set",
+     "--results-dir", "/kaggle/working/smoke"])
+"""),
+        code("""
+run(["benchmarks.run_top_tagging",
+     "--cache-dir", DATA, "--representation", "constituents",
+     "--canonical-splits", "--epochs", "30", "--normalize", "global",
+     "--seed", "%d", "--device", "cuda", "--dtype", "float32",
+     "--batch-size", "256", "--n-constituents", "64",
+     "--rounds", "3", "--neighbors", "16",
+     "--eval-chunk-size", "1024",
+     "--models", "so3c_message_set",
+     "--results-dir", OUT, "--ckpt-dir", CKPT,
+     "--resume", "--max-seconds", "26000"])
+""" % seed),
+        code("""
+import json, glob
+print("%-22s%9s%9s%10s%8s" % ("model", "params", "AUC", "rej@0.3", "hours"))
+print("%-22s%9d%9.4f%10.0f%8.2f"
+      % ("so3c_covariant_set", 9078, 0.9772, 638, 1.66))
+for f in sorted(glob.glob(OUT + "/*.json")):
+    r = json.load(open(f)); t = r["test_metrics"]
+    print("%-22s%9d%9.4f%10.0f%8.2f"
+          % (r["model"], r["n_params"], t["test_auc"], t["bg_rej_30"],
+             r["walltime_sec"] / 3600))
+"""),
+    ]
+    _finalise(cells, NB_DIR / ("kaggle_message_seed%d.ipynb" % seed))
+
+
 def main() -> int:
     blob = embed_code()
     print("embedded code: %.0f KB base64" % (len(blob) / 1024))
@@ -677,6 +864,8 @@ def main() -> int:
     build_fixed(blob)
     build_k64_seed(blob, seed=1)
     build_kappa(blob)
+    build_message_probe(blob)
+    build_message(blob, seed=0)
     return 0
 
 

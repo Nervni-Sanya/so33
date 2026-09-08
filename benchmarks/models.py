@@ -84,6 +84,7 @@ SET_MODELS = (
     "so3c_equivariant_set",  # + channel lift & geodesic flow (so3c Arch B)
     "so3c_interaction_set",  # + SO3CInteraction multi-particle ODE flow
     "so3c_covariant_set",    # flow with a COVARIANT connection (the fix)
+    "so3c_message_set",      # + multi-round covariant message passing
 )
 # The so3c set family (subset of SET_MODELS, dispatched in _build_deepsets).
 SO3C_SET_MODELS = (
@@ -91,6 +92,7 @@ SO3C_SET_MODELS = (
     "so3c_equivariant_set",
     "so3c_interaction_set",
     "so3c_covariant_set",
+    "so3c_message_set",
 )
 ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS + SET_MODELS
 
@@ -519,10 +521,17 @@ def _build_deepsets(
             SO3CEquivariantSetClassifier,
             SO3CInteractionSetClassifier,
             SO3CInvariantSetClassifier,
+            SO3CMessageSetClassifier,
         )
         # Capacity knobs (channels / hidden / act_hidden / T) come through
         # so3c_kwargs so a scaling study is a CLI matter, not a code edit.
         extra = dict(so3c_kwargs or {})
+        if name != "so3c_message_set":
+            # Message-passing-only knobs; harmless to drop for the others so
+            # a sweep can pass one kwargs dict across the whole family.
+            for k in ("rounds", "scalar_dim", "msg_dim", "channel_mixing",
+                      "neighbors"):
+                extra.pop(k, None)
         if name == "so3c_invariant_set":
             extra.pop("channels", None)      # no channel axis in the no-flow model
             extra.pop("act_hidden", None)
@@ -535,6 +544,9 @@ def _build_deepsets(
         if name == "so3c_covariant_set":
             return SO3CCovariantSetClassifier(out_features=out_features,
                                               dtype=dtype, **extra)
+        if name == "so3c_message_set":
+            return SO3CMessageSetClassifier(out_features=out_features,
+                                            dtype=dtype, **extra)
         extra.pop("channels", None)          # interaction model is single-channel
         extra.pop("act_hidden", None)
         return SO3CInteractionSetClassifier(out_features=out_features,

@@ -92,6 +92,24 @@ def main(argv: list[str] | None = None) -> int:
                         "capacity axis of the scaling study).")
     p.add_argument("--act-hidden", type=int, default=None,
                    help="so3c set models: width of the connection MLP.")
+    p.add_argument("--rounds", type=int, default=None,
+                   help="so3c_message_set: covariant message-passing rounds.")
+    p.add_argument("--scalar-dim", type=int, default=None,
+                   help="so3c_message_set: width of the per-particle scalar "
+                        "channel that runs alongside the vector state.")
+    p.add_argument("--msg-dim", type=int, default=None,
+                   help="so3c_message_set: width of the edge message.")
+    p.add_argument("--neighbors", type=int, default=None,
+                   help="so3c_message_set: restrict messages to each "
+                        "particle's k strongest partners, ranked by the "
+                        "INVARIANT |Re z_a.z_b|. Cuts the per-round cost "
+                        "from K^2 to K*k and keeps equivariance, because "
+                        "the ranking key does not move under a boost.")
+    p.add_argument("--flow-T", type=float, default=None,
+                   help="so3c set models: geodesic flow time.")
+    p.add_argument("--lr", type=float, default=3e-3,
+                   help="Adam learning rate (inherited default 3e-3).")
+    p.add_argument("--weight-decay", type=float, default=0.0)
     p.add_argument("--ckpt-dir", type=str, default=None,
                    help="Directory for training checkpoints; --resume needs it.")
     p.add_argument("--resume", action="store_true",
@@ -143,6 +161,11 @@ def main(argv: list[str] | None = None) -> int:
         ("channels", args.channels),
         ("hidden", args.hidden),
         ("act_hidden", args.act_hidden),
+        ("rounds", args.rounds),
+        ("scalar_dim", args.scalar_dim),
+        ("msg_dim", args.msg_dim),
+        ("neighbors", args.neighbors),
+        ("T", args.flow_T),
     ) if v is not None} or None
 
     kwargs = dict(
@@ -157,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
         device=args.device,
         dtype=torch.float32 if args.dtype == "float32" else torch.float64,
         batch_size=args.batch_size,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
         so3c_kwargs=so3c_kwargs,
         ckpt_dir=args.ckpt_dir,
         resume=args.resume,

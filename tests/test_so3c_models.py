@@ -318,6 +318,93 @@ def test_covariant_set_is_equivariant_when_excited() -> None:
     print(f"    (flow displaces logits by {moved:.2f}, so this is not vacuous)")
 
 
+def test_message_set_is_equivariant_when_excited() -> None:
+    """Multi-round covariant message passing keeps exact equivariance.
+
+    Each round adds three things that could break it and do not:
+
+    * a scalar channel h, updated from bilinear invariants only, so h is
+      itself invariant and may be fed back into the edge features;
+    * a complex channel mixing M, which commutes with Q because Q is
+      complex linear;
+    * a second and third application of the flow, whose connection is
+      rebuilt covariantly from the already-rotated states.
+
+    As in the single-round test, the weight heads are zero-initialised, so
+    the flow must be excited by hand or the assertion would hold vacuously
+    for the identity map.
+    """
+    from benchmarks.models import build_model
+    from so3c.lift import random_lorentz_pair
+
+    gen = torch.Generator().manual_seed(21)
+    x = _random_jets(6, 12, gen)
+
+    torch.manual_seed(7)
+    m = build_model("so3c_message_set", in_features=4, out_features=2,
+                    representation="constituents").eval()
+    torch.manual_seed(7)
+    identity = build_model("so3c_message_set", in_features=4, out_features=2,
+                           representation="constituents").eval()
+    with torch.no_grad():
+        for r in range(m.rounds):
+            m.w_head[r].weight.normal_(0, 0.5, generator=gen)
+            m.w_head[r].bias.normal_(0, 0.5, generator=gen)
+            m.mix[r].normal_(0, 0.3, generator=gen)
+        base = m(x)
+        moved = (base - identity(x)).abs().max().item()
+    assert moved > 1e-2, f"flow is inert, test would be vacuous: {moved:.2e}"
+
+    for boost in (0.5, 1.0, 2.0, 3.0):
+        L, _ = random_lorentz_pair(rot_scale=1.0, boost_scale=boost,
+                                   generator=gen)
+        x_t = torch.cat([x[..., :4] @ L.T, x[..., 4:]], dim=-1)
+        with torch.no_grad():
+            err = (m(x_t) - base).abs().max().item()
+        assert err < 1e-6, f"message model lost equivariance at {boost}: {err:.2e}"
+        print(f"  ✓ so3c_message_set equivariant at boost {boost} ({err:.1e})")
+    print(f"    (3 rounds displace logits by {moved:.2f}, so this is not vacuous)")
+
+
+def test_message_set_neighbour_graph_is_equivariant() -> None:
+    """kNN sparsification preserves equivariance because the ranking key is
+    an invariant: |Re z_a.z_b| does not move under z -> Qz, so every jet
+    keeps the SAME neighbour index set in any frame. A key built from a
+    frame-dependent quantity (angular distance, pT ordering) would silently
+    reshuffle edges under a boost and break the symmetry with no error.
+    """
+    from benchmarks.models import build_model
+    from so3c.lift import random_lorentz_pair
+
+    gen = torch.Generator().manual_seed(5)
+    x = _random_jets(6, 16, gen)
+
+    torch.manual_seed(3)
+    m = build_model("so3c_message_set", in_features=4, out_features=2,
+                    representation="constituents",
+                    so3c_kwargs={"neighbors": 6}).eval()
+    torch.manual_seed(3)
+    identity = build_model("so3c_message_set", in_features=4, out_features=2,
+                           representation="constituents",
+                           so3c_kwargs={"neighbors": 6}).eval()
+    with torch.no_grad():
+        for r in range(m.rounds):
+            m.w_head[r].weight.normal_(0, 0.5, generator=gen)
+            m.w_head[r].bias.normal_(0, 0.5, generator=gen)
+        base = m(x)
+        moved = (base - identity(x)).abs().max().item()
+    assert moved > 1e-2, f"flow is inert, test would be vacuous: {moved:.2e}"
+
+    for boost in (1.0, 2.0):
+        L, _ = random_lorentz_pair(rot_scale=1.0, boost_scale=boost,
+                                   generator=gen)
+        x_t = torch.cat([x[..., :4] @ L.T, x[..., 4:]], dim=-1)
+        with torch.no_grad():
+            err = (m(x_t) - base).abs().max().item()
+        assert err < 1e-6, f"kNN model lost equivariance at {boost}: {err:.2e}"
+        print(f"  ✓ so3c_message_set(kNN) equivariant at boost {boost} ({err:.1e})")
+
+
 if __name__ == "__main__":
     print("\n── so3c benchmark-model tests ──")
     test_generator_invariants()
@@ -329,4 +416,6 @@ if __name__ == "__main__":
     test_trained_regime_invariance()
     test_interaction_set_is_equivariant_when_excited()
     test_covariant_set_is_equivariant_when_excited()
+    test_message_set_is_equivariant_when_excited()
+    test_message_set_neighbour_graph_is_equivariant()
     print("All so3c model tests passed.\n")
