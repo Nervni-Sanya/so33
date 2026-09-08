@@ -535,6 +535,14 @@ class SO3CMessageSetClassifier(nn.Module):
     graph is built once from the input and reused across rounds; the states
     rotate, but their pairwise invariants -- and hence the ranking -- are
     only changed by the flow, not by the frame.
+
+    ``scalar_dim=0`` drops the scalar channel entirely, which makes
+    "rounds=R with h" against "rounds=R without h" a single-variable
+    ablation. Note that ``rounds=1`` is NOT the same thing as
+    SO3CCovariantSetClassifier plus a scalar channel: this model also
+    normalises the input lift by its invariant scale, bounds the connection
+    the same way, and mixes channels. Read those two rows as different
+    models, not as one ablation.
     """
 
     def __init__(
@@ -568,7 +576,8 @@ class SO3CMessageSetClassifier(nn.Module):
 
         # Scalar states are seeded from per-particle invariants only:
         # Re/Im (z.z) and the Minkowski mass <p, p>.
-        self.h_init = nn.Linear(3, scalar_dim).to(dtype)
+        self.h_init = (nn.Linear(3, scalar_dim).to(dtype)
+                       if scalar_dim else None)
 
         edge_in = 6 * channels + 2 * scalar_dim
         self.edge = nn.ModuleList()
@@ -582,10 +591,11 @@ class SO3CMessageSetClassifier(nn.Module):
             nn.init.zeros_(head.weight)      # identity flow at init
             nn.init.zeros_(head.bias)
             self.w_head.append(head)
-            self.msg_head.append(nn.Linear(act_hidden, msg_dim).to(dtype))
-            self.node.append(nn.Sequential(
-                nn.Linear(scalar_dim + msg_dim, act_hidden), nn.ReLU(),
-                nn.Linear(act_hidden, scalar_dim)).to(dtype))
+            if scalar_dim:
+                self.msg_head.append(nn.Linear(act_hidden, msg_dim).to(dtype))
+                self.node.append(nn.Sequential(
+                    nn.Linear(scalar_dim + msg_dim, act_hidden), nn.ReLU(),
+                    nn.Linear(act_hidden, scalar_dim)).to(dtype))
 
         if channel_mixing:
             mix = torch.zeros(rounds, channels, channels, 2, dtype=dtype)
@@ -631,11 +641,14 @@ class SO3CMessageSetClassifier(nn.Module):
         z = jet_bivectors(p4, mask)                              # (B, K, 3)
         z = z / self._invariant_scale(z).unsqueeze(-1)
 
-        q = (z * z).sum(dim=-1)
-        m2 = minkowski_inner(p4, p4) * mask
-        h = self.h_init(torch.asinh(
-            torch.stack([q.real, q.imag, m2], dim=-1)))          # (B, K, D)
-        h = h * mask.unsqueeze(-1)
+        if self.scalar_dim:
+            q = (z * z).sum(dim=-1)
+            m2 = minkowski_inner(p4, p4) * mask
+            h = self.h_init(torch.asinh(
+                torch.stack([q.real, q.imag, m2], dim=-1)))      # (B, K, D)
+            h = h * mask.unsqueeze(-1)
+        else:
+            h = None
 
         w = torch.complex(self.channel_weights[:, 0],
                           self.channel_weights[:, 1])            # (C,)
@@ -662,8 +675,8 @@ class SO3CMessageSetClassifier(nn.Module):
                 s_ab = (zp.unsqueeze(2) * zb).sum(dim=-1)        # (B, K, k, C)
                 row = sd.unsqueeze(2).expand(B, K, k, C)
                 col = sd[bat, idx]                               # (B, K, k, C)
-                hb = h[bat, idx]                                 # (B, K, k, D)
-                ha = h.unsqueeze(2).expand(B, K, k, D)
+                scal = ([h.unsqueeze(2).expand(B, K, k, D), h[bat, idx]]
+                        if self.scalar_dim else [])
                 emask = edge_mask.unsqueeze(-1)
             else:
                 S = zc @ zc.transpose(-1, -2)                    # (B, C, K, K)
@@ -671,24 +684,25 @@ class SO3CMessageSetClassifier(nn.Module):
                 s_ab = S.permute(0, 2, 3, 1)                     # (B, K, K, C)
                 row = sd.unsqueeze(2).expand(B, K, K, C)
                 col = sd.unsqueeze(1).expand(B, K, K, C)
-                hb = h.unsqueeze(1).expand(B, K, K, D)
-                ha = h.unsqueeze(2).expand(B, K, K, D)
+                scal = ([h.unsqueeze(2).expand(B, K, K, D),
+                         h.unsqueeze(1).expand(B, K, K, D)]
+                        if self.scalar_dim else [])
                 emask = pair_mask.unsqueeze(-1)
 
             e = torch.cat([
                 torch.asinh(s_ab.real), torch.asinh(s_ab.imag),
                 torch.asinh(row.real), torch.asinh(row.imag),
                 torch.asinh(col.real), torch.asinh(col.imag),
-                ha, hb,
-            ], dim=-1)                                           # (B,K,*,6C+2D)
+            ] + scal, dim=-1)                                    # (B,K,*,6C+2D)
 
             hid = self.edge[r](e)
             wts = self.w_head[r](hid) * emask                    # (B, K, *, C)
-            msg = self.msg_head[r](hid) * emask                  # (B, K, *, M)
 
-            h = h + self.node[r](torch.cat(
-                [h, msg.sum(dim=2) / denom.unsqueeze(-1)], dim=-1))
-            h = h * node_mask
+            if self.scalar_dim:
+                msg = self.msg_head[r](hid) * emask              # (B, K, *, M)
+                h = h + self.node[r](torch.cat(
+                    [h, msg.sum(dim=2) / denom.unsqueeze(-1)], dim=-1))
+                h = h * node_mask
 
             if sparse:
                 ref = torch.complex(
@@ -719,12 +733,14 @@ class SO3CMessageSetClassifier(nn.Module):
         cross = torch.cat([torch.asinh(T_pairs.real),
                            torch.asinh(T_pairs.imag)], dim=-1)
 
-        n = mask.sum(dim=-1).clamp_min(1.0)
-        h_mean = (h * node_mask).sum(dim=1) / n.unsqueeze(-1)
-        h_max = torch.where(node_mask.bool(), h,
-                            torch.full_like(h, -1e30)).amax(dim=1)
+        pooled = []
+        if self.scalar_dim:
+            n = mask.sum(dim=-1).clamp_min(1.0)
+            pooled = [(h * node_mask).sum(dim=1) / n.unsqueeze(-1),
+                      torch.where(node_mask.bool(), h,
+                                  torch.full_like(h, -1e30)).amax(dim=1)]
         return self.mlp(torch.cat(
-            [per_ch, cross, h_mean, h_max, _minkowski_stats(p4, mask)],
+            [per_ch, cross] + pooled + [_minkowski_stats(p4, mask)],
             dim=-1))
 
     def regularization_loss(self) -> torch.Tensor:

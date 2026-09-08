@@ -333,6 +333,14 @@ def test_message_set_is_equivariant_when_excited() -> None:
     As in the single-round test, the weight heads are zero-initialised, so
     the flow must be excited by hand or the assertion would hold vacuously
     for the identity map.
+
+    The tolerance is a float64 tolerance, and the generator is pinned for a
+    reason. `random_lorentz_pair(boost_scale=s)` draws each beta component
+    from N(0, s), so a draw at s = 2 can reach rapidity 5, where the lift's
+    E_p q - E_q p cancels away real digits before the states are normalised.
+    Errors of 1e-5 are reachable there in double precision. If this ever
+    fails on a new draw, check the rapidity actually sampled before
+    concluding the symmetry broke.
     """
     from benchmarks.models import build_model
     from so3c.lift import random_lorentz_pair
