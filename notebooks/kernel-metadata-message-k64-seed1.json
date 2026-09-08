@@ -1,0 +1,15 @@
+{
+  "id": "nsanya/so3c-message-k64-seed1",
+  "title": "SO3C message K64 seed1",
+  "code_file": "kaggle_message_k64_seed1.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [
+    "nsanya/so3c-data-prep-k-128"
+  ]
+}

@@ -762,8 +762,8 @@ for f in sorted(glob.glob(OUT + "/*/*.json")):
     _finalise(cells, NB_DIR / "kaggle_message_probe.ipynb")
 
 
-def build_message(blob: str, seed: int = 0) -> None:
-    """Tier-2 item 5: covariant message passing at the K=64 operating point.
+def build_message(blob: str, seed: int = 0, k: int = 64) -> None:
+    """Tier-2 item 5: covariant message passing on the canonical protocol.
 
     The single-round covariant model puts every constituent through three
     complex numbers and one rotation. `so3c_message_set` runs the same
@@ -771,26 +771,30 @@ def build_message(blob: str, seed: int = 0) -> None:
     channel alongside the vector one, which is what LGEB/PELICAN do and
     what our architecture has been missing.
 
-    Cost. The per-round edge MLP reads 6C + 2D = 40 features per pair
-    against the single-round model's 6, so a dense run is ~7.6x the
-    covariant baseline -- 12 h at K=64, past any single session. The kNN
-    graph (--neighbors 16) cuts the edge count from K^2 = 4096 to K*k =
-    1024 and brings it back to ~2x, i.e. ~3.5 h. The ranking key is the
-    invariant |Re z_a.z_b|, so the graph is the same in every frame and
-    equivariance survives (tests/test_so3c_models.py).
+    Cost, measured at batch 64 / K=64 rather than guessed: 7.5x the
+    covariant baseline dense, 5.2x on a k=16 graph. The kNN saving is far
+    smaller than the 4x drop in edge count suggests, because the edge MLP
+    is not what dominates -- expm_so3c over (B, C, K) generators and the
+    pooled readout are, and neither cares how sparse the graph is. So a
+    K=64 run is ~8.6 h against the covariant model's 1.66 h. It carries
+    --max-seconds and a checkpoint dir and will want a second session.
+
+    The ranking key is the invariant |Re z_a.z_b|, so the graph is the same
+    in every frame and equivariance survives (tests/test_so3c_models.py).
 
     The smoke cell runs 1 epoch on 20k jets first: it costs ~2 minutes and
     catches an OOM or a shape error before the session commits hours.
     """
     cells = [
         md("""
-# Covariant message passing (K=64)
+# Covariant message passing
 
-`so3c_covariant_set` at K=64 scores AUC 0.9772 +- 0.0001 with background
-rejection 638 +- 1 (2 seeds, 9078 params). This run asks whether the
+`so3c_covariant_set` scores AUC 0.9746 +- 0.0001 / rejection 312 at K=32 and
+0.9772 +- 0.0001 / 638 at K=64 (9078 params). This run asks whether the
 architecture is limited by having only ONE round of covariant mixing and no
 scalar channel -- the two things every published Lorentz-equivariant tagger
-has that we do not.
+has that we do not. On 40k jets and 20 epochs off the canonical protocol,
+three rounds took 0.9679 -> 0.9749 and rejection 132 -> 303.
 
 The model stays exactly equivariant: the graph is ranked by an invariant,
 the messages are invariants, the connection is a cross product of covariant
@@ -822,29 +826,31 @@ run(["benchmarks.run_top_tagging",
      "--canonical-splits", "--epochs", "1", "--normalize", "global",
      "--max-train-samples", "20000",
      "--seed", "0", "--device", "cuda", "--dtype", "float32",
-     "--batch-size", "256", "--n-constituents", "64",
+     "--batch-size", "256", "--n-constituents", "%d",
      "--rounds", "3", "--neighbors", "16",
      "--eval-chunk-size", "1024",
      "--models", "so3c_message_set",
      "--results-dir", "/kaggle/working/smoke"])
-"""),
+""" % k),
         code("""
 run(["benchmarks.run_top_tagging",
      "--cache-dir", DATA, "--representation", "constituents",
      "--canonical-splits", "--epochs", "30", "--normalize", "global",
      "--seed", "%d", "--device", "cuda", "--dtype", "float32",
-     "--batch-size", "256", "--n-constituents", "64",
+     "--batch-size", "256", "--n-constituents", "%d",
      "--rounds", "3", "--neighbors", "16",
      "--eval-chunk-size", "1024",
      "--models", "so3c_message_set",
      "--results-dir", OUT, "--ckpt-dir", CKPT,
      "--resume", "--max-seconds", "26000"])
-""" % seed),
+""" % (seed, k)),
         code("""
 import json, glob
 print("%-22s%9s%9s%10s%8s" % ("model", "params", "AUC", "rej@0.3", "hours"))
 print("%-22s%9d%9.4f%10.0f%8.2f"
-      % ("so3c_covariant_set", 9078, 0.9772, 638, 1.66))
+      % ("covariant K=32", 9078, 0.9746, 312, 0.53))
+print("%-22s%9d%9.4f%10.0f%8.2f"
+      % ("covariant K=64", 9078, 0.9772, 638, 1.66))
 for f in sorted(glob.glob(OUT + "/*.json")):
     r = json.load(open(f)); t = r["test_metrics"]
     print("%-22s%9d%9.4f%10.0f%8.2f"
@@ -852,7 +858,7 @@ for f in sorted(glob.glob(OUT + "/*.json")):
              r["walltime_sec"] / 3600))
 """),
     ]
-    _finalise(cells, NB_DIR / ("kaggle_message_seed%d.ipynb" % seed))
+    _finalise(cells, NB_DIR / ("kaggle_message_k%d_seed%d.ipynb" % (k, seed)))
 
 
 def main() -> int:
@@ -865,7 +871,9 @@ def main() -> int:
     build_k64_seed(blob, seed=1)
     build_kappa(blob)
     build_message_probe(blob)
-    build_message(blob, seed=0)
+    for k in (32, 64):
+        for seed in (0, 1):
+            build_message(blob, seed=seed, k=k)
     return 0
 
 
