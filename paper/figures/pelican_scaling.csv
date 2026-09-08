@@ -1,0 +1,9 @@
+depth,width,n_params,accuracy,auc,bg_rej_30,bg_rej_30_err,source,table,verified
+5,132/78,208000,0.9425,0.9870,2250,75,"Bogatskiy et al. 2023 (arXiv:2307.16506)",table 2,yes
+5,60/35,48000,0.9424,0.9868,2148,125,"Bogatskiy et al. 2023 (arXiv:2307.16506)",table 2,yes
+5,25/15,11000,0.9410,0.9858,1879,103,"Bogatskiy et al. 2023 (arXiv:2307.16506)",table 2,yes
+5,10/6,3000,0.9386,0.9850,1494,43,"Bogatskiy et al. 2023 (arXiv:2307.16506)",table 2,yes
+3,6/4,1000,0.9358,0.9835,1145,74,"Bogatskiy et al. 2023 (arXiv:2307.16506)",table 2,yes
+2,6/3,605,0.9336,0.9823,901,59,"Bogatskiy et al. 2023 (arXiv:2307.16506)",table 2,yes
+1,6/3,326,0.9291,0.9801,669,41,"Bogatskiy et al. 2023 (arXiv:2307.16506)",table 2,yes
+1,-/6,248,0.9258,0.9780,516,52,"Bogatskiy et al. 2023 (arXiv:2307.16506)",table 2,yes

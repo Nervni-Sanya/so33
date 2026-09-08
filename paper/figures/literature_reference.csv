@@ -1,5 +1,16 @@
-model,n_params,auc,bg_rej_30,source,verified
-LGN,4500,0.964,435,"Bogatskiy et al. 2020 (arXiv:2006.04780)",no
-ParticleNet,498000,0.986,1615,"Qu & Gouskos 2020 (arXiv:1902.08570)",no
-LorentzNet,220000,0.987,2195,"Gong et al. 2022 (arXiv:2201.08187)",no
-PELICAN,208000,0.987,2250,"Bogatskiy et al. 2023 (arXiv:2307.16506)",no
+model,n_params,auc,bg_rej_30,bg_rej_30_err,accuracy,source,table,verified,primary
+TopoDNN,59000,0.972,382,5,0.916,Bogatskiy et al. 2023 (arXiv:2307.16506),table 1,yes,yes
+EFN,82000,0.979,729,13,0.927,Bogatskiy et al. 2023 (arXiv:2307.16506),table 1,yes,yes
+LGN,4500,0.9640,435,95,0.929,Gong et al. 2022 (arXiv:2201.08187),table 1,yes,yes
+LGN,4500,0.964,424,82,0.929,Bogatskiy et al. 2023 (arXiv:2307.16506),table 1,yes,no
+EFP,1000,0.980,384,,0.932,Bogatskiy et al. 2023 (arXiv:2307.16506),table 1,yes,yes
+PFN,82000,0.9819,888,17,0.932,Gong et al. 2022 (arXiv:2201.08187),table 1,yes,yes
+P-CNN,348000,0.9803,759,24,0.930,Gong et al. 2022 (arXiv:2201.08187),table 1,yes,yes
+EGNN,222000,0.9760,540,49,0.922,Gong et al. 2022 (arXiv:2201.08187),table 1,yes,yes
+ResNeXt,1460000,0.9837,1147,58,0.936,Gong et al. 2022 (arXiv:2201.08187),table 1,yes,yes
+ParticleNet,366000,0.9858,1615,93,0.940,Gong et al. 2022 (arXiv:2201.08187),table 1,yes,yes
+ParticleNet,498000,0.985,1298,46,0.938,Bogatskiy et al. 2023 (arXiv:2307.16506),table 1,yes,no
+ParT,2100000,0.9858,1602,81,0.940,Bogatskiy et al. 2023 (arXiv:2307.16506),table 1,yes,yes
+LorentzNet,224000,0.9868,2195,173,0.942,Gong et al. 2022 (arXiv:2201.08187),tables 1 and 5,yes,yes
+PELICAN,208000,0.9870,2250,75,0.9426,Bogatskiy et al. 2023 (arXiv:2307.16506),table 1,yes,yes
+PELICAN-IRC,208000,0.9844,1711,208,0.9406,Bogatskiy et al. 2023 (arXiv:2307.16506),table 1,yes,yes

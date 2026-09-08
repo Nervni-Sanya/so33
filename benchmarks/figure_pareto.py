@@ -33,11 +33,34 @@ from benchmarks.plotting import (
 
 
 def _load_literature(path: pathlib.Path) -> list[dict]:
+    """Published points, one per model.
+
+    The file keeps every evaluation we verified, including the cases where
+    two papers report the same model differently -- ParticleNet is 1615 +- 93
+    in the LorentzNet table and 1298 +- 46 in PELICAN's, a 24% spread that is
+    worth knowing before reading anyone's rejection number to three digits.
+    Only rows marked primary go on the figure.
+    """
     if not path.is_file():
         print(f"[pareto] no literature file at {path}; plotting our models only.")
         return []
     with path.open(encoding="utf-8") as fh:
-        return list(csv.DictReader(fh))
+        rows = list(csv.DictReader(fh))
+    return [r for r in rows if r.get("primary", "yes") == "yes"]
+
+
+def _load_scaling(path: pathlib.Path) -> list[dict]:
+    """PELICAN's own size sweep (its table 2).
+
+    This is the comparison that matters for a small-model claim, and it is
+    unforgiving: PELICAN reaches AUC 0.9850 and rejection 1494 at 3k
+    parameters. Any Pareto argument has to be made against this curve, not
+    against the 208k headline model.
+    """
+    if not path.is_file():
+        return []
+    with path.open(encoding="utf-8") as fh:
+        return sorted(csv.DictReader(fh), key=lambda r: float(r["n_params"]))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -50,6 +73,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out-dir", type=str, default=str(DEFAULT_OUT_DIR))
     p.add_argument("--literature", type=str,
                    default=str(DEFAULT_OUT_DIR / "literature_reference.csv"))
+    p.add_argument("--scaling", type=str,
+                   default=str(DEFAULT_OUT_DIR / "pelican_scaling.csv"),
+                   help="A published model's own parameter sweep, drawn as a "
+                        "curve. Empty string to omit it.")
     p.add_argument("--include", type=str,
                    default="so3c_equivariant_set,so3c_invariant_set,"
                            "eta_invariants,relu_mlp",
@@ -99,13 +126,17 @@ def main(argv: list[str] | None = None) -> int:
     rows.sort(key=lambda r: r["n_params"])
 
     lit = _load_literature(pathlib.Path(args.literature))
+    scaling = _load_scaling(pathlib.Path(args.scaling)) if args.scaling else []
 
     write_csv(
         out_dir / "pareto_data.csv",
         ["model", "n_params", "n_seeds", "auc", "auc_std", "bg_rej_30", "bg_rej_30_std", "origin"],
         [[r["model"], r["n_params"], r["n_seeds"], f"{r['auc']:.5f}", f"{r['auc_std']:.5f}",
           f"{r['rej']:.1f}", f"{r['rej_std']:.1f}", "measured"] for r in rows]
-        + [[l["model"], l["n_params"], "", l["auc"], "", l["bg_rej_30"], "", "quoted"] for l in lit],
+        + [[l["model"], l["n_params"], "", l["auc"], "", l["bg_rej_30"], "", "published"]
+           for l in lit]
+        + [[f"PELICAN({r['n_params']})", r["n_params"], "", r["auc"], "",
+            r["bg_rej_30"], "", "published"] for r in scaling],
     )
 
     plt = get_pyplot()
@@ -142,6 +173,13 @@ def main(argv: list[str] | None = None) -> int:
                         color=stl["color"], marker=stl["marker"], markersize=6,
                         capsize=2, linestyle="none", label=legend_label, zorder=3)
         offsets = [(5, 4), (5, -9), (-6, 6), (-6, -11)]
+        if scaling:
+            ax.plot([float(r["n_params"]) for r in scaling],
+                    [float(r["auc"] if key == "auc" else r["bg_rej_30"])
+                     for r in scaling],
+                    color="#999999", linewidth=1.0, marker=".", markersize=4,
+                    linestyle="--", zorder=1,
+                    label="PELICAN, its own size sweep")
         for i, l in enumerate(lit):
             val = float(l["auc"] if key == "auc" else l["bg_rej_30"])
             ax.plot(float(l["n_params"]), val, markerfacecolor="none",
@@ -167,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
         seen.setdefault(lb, h)
     star = plt.Line2D([], [], markerfacecolor="none", markersize=9,
                       color=LITERATURE_STYLE["color"], marker="*", linestyle="none")
-    seen["published (quoted, not re-verified)"] = star
+    seen["published (verified against the source table)"] = star
     fig.legend(seen.values(), seen.keys(), loc="lower center",
                ncol=2, frameon=False, bbox_to_anchor=(0.5, -0.16))
 
