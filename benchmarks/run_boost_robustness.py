@@ -154,6 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         drop = curve[0]["auc"] - curve[-1]["auc"]
         print(f"  {name:<22} drop over the range: {drop:+.4f}")
         record = {"model": name, "n_params": n_params, "seed": args.seed,
+                  "dtype": args.dtype,
                   "n_jets": args.n, "epochs": args.epochs,
                   "n_constituents": args.n_constituents,
                   "so3c_kwargs": so3c_kwargs, "curve": curve, "drop": drop}

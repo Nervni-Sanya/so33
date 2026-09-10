@@ -1,0 +1,25 @@
+model,n_params,boost_scale,auc,auc_std,delta_auc,spread_over,draws,n_seeds,dtype
+so3c_message_set,13862,0.0,0.96711,0.00000,+0.00000,draws,1,1,not recorded
+so3c_message_set,13862,0.5,0.96711,0.00000,-0.00000,draws,4,1,not recorded
+so3c_message_set,13862,1.0,0.96711,0.00000,+0.00000,draws,4,1,not recorded
+so3c_message_set,13862,1.5,0.96711,0.00000,+0.00000,draws,4,1,not recorded
+so3c_message_set,13862,2.0,0.96712,0.00002,+0.00001,draws,4,1,not recorded
+so3c_message_set,13862,3.0,0.96716,0.00006,+0.00005,draws,4,1,not recorded
+so3c_equivariant_set,9056,0.0,0.94241,0.00000,+0.00000,draws,1,1,not recorded
+so3c_equivariant_set,9056,0.5,0.93914,0.00419,-0.00326,draws,4,1,not recorded
+so3c_equivariant_set,9056,1.0,0.90230,0.05968,-0.04011,draws,4,1,not recorded
+so3c_equivariant_set,9056,1.5,0.86532,0.04970,-0.07709,draws,4,1,not recorded
+so3c_equivariant_set,9056,2.0,0.60518,0.19544,-0.33723,draws,4,1,not recorded
+so3c_equivariant_set,9056,3.0,0.44142,0.32840,-0.50098,draws,4,1,not recorded
+so3c_covariant_set,9078,0.0,0.95655,0.00000,+0.00000,draws,1,1,not recorded
+so3c_covariant_set,9078,0.5,0.95655,0.00000,-0.00000,draws,4,1,not recorded
+so3c_covariant_set,9078,1.0,0.95655,0.00000,-0.00000,draws,4,1,not recorded
+so3c_covariant_set,9078,1.5,0.95655,0.00000,-0.00000,draws,4,1,not recorded
+so3c_covariant_set,9078,2.0,0.95656,0.00002,+0.00001,draws,4,1,not recorded
+so3c_covariant_set,9078,3.0,0.95651,0.00017,-0.00004,draws,4,1,not recorded
+so3c_invariant_set,5122,0.0,0.95155,0.00000,+0.00000,draws,1,1,not recorded
+so3c_invariant_set,5122,0.5,0.95155,0.00000,+0.00000,draws,4,1,not recorded
+so3c_invariant_set,5122,1.0,0.95155,0.00000,-0.00000,draws,4,1,not recorded
+so3c_invariant_set,5122,1.5,0.95155,0.00000,+0.00000,draws,4,1,not recorded
+so3c_invariant_set,5122,2.0,0.95157,0.00003,+0.00001,draws,4,1,not recorded
+so3c_invariant_set,5122,3.0,0.95148,0.00021,-0.00007,draws,4,1,not recorded
