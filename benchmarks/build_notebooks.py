@@ -762,6 +762,131 @@ for f in sorted(glob.glob(OUT + "/*/*.json")):
     _finalise(cells, NB_DIR / "kaggle_message_probe.ipynb")
 
 
+def build_message_sweep(blob: str) -> None:
+    """How steep is this architecture's capacity slope?
+
+    That number decides the paper. PELICAN's own size sweep (its table 2,
+    now in paper/figures/pelican_scaling.csv) reaches AUC 0.9850 and
+    rejection 1494 at 3k parameters and only 0.9870 / 2250 at 208k -- a
+    +0.0020 slope over 70x the size. If our slope is comparably flat we are
+    saturated near 14k parameters and should say so; if it is steep, there
+    is room to compete on accuracy and next week's quota should buy a large
+    model. Guessing costs nothing to be wrong about and everything later.
+
+    Protocol is the probe's, exactly, so the rows compose with the four we
+    already have: canonical splits, 400k train jets, 20 epochs, batch 256,
+    K=32, float32, seed 0. rounds=3 / channels=4 is the anchor and is NOT
+    re-run -- it scored 0.9786 / 585 in 0.58 h.
+
+    Configurations, cheapest first, so a session cut loses the least:
+
+      scalar_dim=0   10.4k   the clean single-variable test of the scalar
+                             channel. The probe's rounds=1 row cannot play
+                             this role: it also changed the input
+                             normalisation, the connection bound and the
+                             channel mixing.
+      hidden=256     92.8k   capacity poured into the ordinary readout MLP
+      scalar_dim=24  20.7k   capacity in the invariant channel
+      channels=8     21.7k   capacity in the geometric state
+      rounds=6       17.8k   capacity in depth
+      channels=16    44.0k   the same axis, far enough to see a slope
+
+    hidden=256 against channels=16 is the informative pair: 93k parameters
+    of plain MLP against 44k parameters of geometry. Which one moves says
+    what the model is actually short of. (The earlier "scaling is flat"
+    result was measured on the BROKEN model, whose channels were complex
+    scalar rescalings z_c = w_c z; here every channel carries its own phi.)
+    """
+    common = [
+        "--cache-dir", "DATA", "--representation", "constituents",
+        "--canonical-splits", "--epochs", "20", "--normalize", "global",
+        "--max-train-samples", "400000",
+        "--seed", "0", "--device", "cuda", "--dtype", "float32",
+        "--batch-size", "256", "--n-constituents", "32",
+        "--eval-chunk-size", "2048", "--models", "so3c_message_set",
+    ]
+    configs = [
+        ("s0",   ["--rounds", "3", "--scalar-dim", "0"]),
+        ("w256", ["--rounds", "3", "--hidden", "256"]),
+        ("d24",  ["--rounds", "3", "--scalar-dim", "24", "--msg-dim", "24"]),
+        ("c8",   ["--rounds", "3", "--channels", "8"]),
+        ("r6",   ["--rounds", "6"]),
+        ("c16",  ["--rounds", "3", "--channels", "16"]),
+    ]
+    cells = [
+        md("""
+# Capacity sweep: where is this architecture short?
+
+Three rounds of covariant message passing scored **0.9786 / 585** at 13 862
+parameters on this protocol, against **0.9731 / 266** for the single-round
+covariant model. The question now is not whether the construction works but
+whether it has headroom.
+
+The comparison that sets the bar is PELICAN's own size sweep: 0.9850 / 1494
+at 3k parameters, 0.9858 / 1879 at 11k, 0.9870 / 2250 at 208k. A +0.0020
+AUC slope across 70x the parameters. If ours is that flat we are saturated
+and the paper says so; if it is steep, there is accuracy left to win.
+"""),
+        code("""
+import torch, subprocess
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader"], capture_output=True,
+                     text=True).stdout.strip())
+"""),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code(GPU_SETUP),
+        code("""
+import glob, pathlib
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+assert cands, "attach the K=128 data-prep kernel output"
+DATA = str(pathlib.Path(cands[0]).parent)
+OUT = "/kaggle/working/results_sweep"
+CKPT = "/kaggle/working/checkpoints"
+COMMON = %r
+COMMON[COMMON.index("DATA")] = DATA
+CONFIGS = %r
+print("data:", DATA)
+""" % (common, configs)),
+        code("""
+# ~5.4 h for all six against a 9 h cap. Each config writes its own results
+# dir, so --resume skips whatever already finished if the session is cut
+# and this cell is rerun.
+for tag, extra in CONFIGS:
+    print("=== %s ===" % tag, flush=True)
+    run(["benchmarks.run_top_tagging"] + COMMON + extra +
+        ["--results-dir", OUT + "/" + tag,
+         "--ckpt-dir", CKPT + "/" + tag, "--resume",
+         "--max-seconds", "26000"])
+"""),
+        code("""
+import json, glob, pathlib
+print("%-8s%-38s%9s%9s%10s%8s"
+      % ("tag", "config", "params", "AUC", "rej@0.3", "hours"))
+print("%-8s%-38s%9d%9.4f%10.0f%8.2f"
+      % ("--", "so3c_covariant_set (1 round, no h)", 9078, 0.9731, 266, 0.19))
+print("%-8s%-38s%9d%9.4f%10.0f%8.2f"
+      % ("anchor", "rounds=3 channels=4", 13862, 0.9786, 585, 0.58))
+rows = []
+for tag, extra in CONFIGS:
+    for f in sorted(glob.glob(OUT + "/" + tag + "/*.json")):
+        r = json.load(open(f)); t = r["test_metrics"]
+        rows.append((r["n_params"], t["test_auc"], t["bg_rej_30"]))
+        print("%-8s%-38s%9d%9.4f%10.0f%8.2f"
+              % (tag, " ".join(extra), r["n_params"], t["test_auc"],
+                 t["bg_rej_30"], r["walltime_sec"] / 3600))
+if rows:
+    best = max(rows, key=lambda r: r[1])
+    print()
+    print("slope from the 13862-parameter anchor to the best row:")
+    print("  %+.4f AUC, %+.0f rejection, at %.1fx the parameters"
+          % (best[1] - 0.9786, best[2] - 585, best[0] / 13862))
+    print("PELICAN over 3k -> 208k (70x): +0.0020 AUC, +756 rejection")
+"""),
+    ]
+    _finalise(cells, NB_DIR / "kaggle_message_sweep.ipynb")
+
+
 def build_message(blob: str, seed: int = 0, k: int = 64) -> None:
     """Tier-2 item 5: covariant message passing on the canonical protocol.
 
@@ -771,16 +896,17 @@ def build_message(blob: str, seed: int = 0, k: int = 64) -> None:
     channel alongside the vector one, which is what LGEB/PELICAN do and
     what our architecture has been missing.
 
-    Cost, measured at batch 64 / K=64 rather than guessed: 7.5x the
-    covariant baseline dense, 5.2x on a k=16 graph. The kNN saving is far
-    smaller than the 4x drop in edge count suggests, because the edge MLP
-    is not what dominates -- expm_so3c over (B, C, K) generators and the
-    pooled readout are, and neither cares how sparse the graph is. So a
-    K=64 run is ~8.6 h against the covariant model's 1.66 h. It carries
-    --max-seconds and a checkpoint dir and will want a second session.
+    Dense, not kNN. On the canonical protocol the k=16 graph cost 0.0011
+    AUC and 93 rejection and saved 2% of the wall clock (0.57 h against
+    0.58 h) -- the edge MLP is not the bottleneck, expm_so3c over
+    (B, C, K) generators and the pooled readout are, and neither cares how
+    sparse the graph is. The sparsification stays in the model, tested and
+    equivariant, but there is no reason to pay for it here.
 
-    The ranking key is the invariant |Re z_a.z_b|, so the graph is the same
-    in every frame and equivariance survives (tests/test_so3c_models.py).
+    Cost measured on the GPU, not extrapolated: message passing is 3.05x
+    the covariant model on the same protocol, so K=64 is ~5.1 h/seed
+    against its 1.66 h. --max-seconds and a checkpoint dir cover a cut
+    session.
 
     The smoke cell runs 1 epoch on 20k jets first: it costs ~2 minutes and
     catches an OOM or a shape error before the session commits hours.
@@ -827,7 +953,7 @@ run(["benchmarks.run_top_tagging",
      "--max-train-samples", "20000",
      "--seed", "0", "--device", "cuda", "--dtype", "float32",
      "--batch-size", "256", "--n-constituents", "%d",
-     "--rounds", "3", "--neighbors", "16",
+     "--rounds", "3",
      "--eval-chunk-size", "1024",
      "--models", "so3c_message_set",
      "--results-dir", "/kaggle/working/smoke"])
@@ -838,7 +964,7 @@ run(["benchmarks.run_top_tagging",
      "--canonical-splits", "--epochs", "30", "--normalize", "global",
      "--seed", "%d", "--device", "cuda", "--dtype", "float32",
      "--batch-size", "256", "--n-constituents", "%d",
-     "--rounds", "3", "--neighbors", "16",
+     "--rounds", "3",
      "--eval-chunk-size", "1024",
      "--models", "so3c_message_set",
      "--results-dir", OUT, "--ckpt-dir", CKPT,
@@ -871,6 +997,7 @@ def main() -> int:
     build_k64_seed(blob, seed=1)
     build_kappa(blob)
     build_message_probe(blob)
+    build_message_sweep(blob)
     for k in (32, 64):
         for seed in (0, 1):
             build_message(blob, seed=seed, k=k)
