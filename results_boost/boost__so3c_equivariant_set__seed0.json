@@ -1,0 +1,48 @@
+{
+  "model": "so3c_equivariant_set",
+  "n_params": 9056,
+  "seed": 0,
+  "n_jets": 20000,
+  "epochs": 8,
+  "n_constituents": 32,
+  "so3c_kwargs": null,
+  "curve": [
+    {
+      "rapidity": 0.0,
+      "auc": 0.9424071907997131,
+      "auc_std": 0.0,
+      "draws": 1
+    },
+    {
+      "rapidity": 0.5,
+      "auc": 0.9391437768936157,
+      "auc_std": 0.0041897958144545555,
+      "draws": 4
+    },
+    {
+      "rapidity": 1.0,
+      "auc": 0.9022977948188782,
+      "auc_std": 0.059682752937078476,
+      "draws": 4
+    },
+    {
+      "rapidity": 1.5,
+      "auc": 0.8653197288513184,
+      "auc_std": 0.049698252230882645,
+      "draws": 4
+    },
+    {
+      "rapidity": 2.0,
+      "auc": 0.6051751971244812,
+      "auc_std": 0.19543522596359253,
+      "draws": 4
+    },
+    {
+      "rapidity": 3.0,
+      "auc": 0.44142353534698486,
+      "auc_std": 0.3283981680870056,
+      "draws": 4
+    }
+  ],
+  "drop": 0.5009836554527283
+}

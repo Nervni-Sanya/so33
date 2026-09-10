@@ -1,0 +1,48 @@
+{
+  "model": "so3c_covariant_set",
+  "n_params": 9078,
+  "seed": 0,
+  "n_jets": 20000,
+  "epochs": 8,
+  "n_constituents": 32,
+  "so3c_kwargs": null,
+  "curve": [
+    {
+      "rapidity": 0.0,
+      "auc": 0.9565492868423462,
+      "auc_std": 0.0,
+      "draws": 1
+    },
+    {
+      "rapidity": 0.5,
+      "auc": 0.9565491080284119,
+      "auc_std": 4.500051886680012e-07,
+      "draws": 4
+    },
+    {
+      "rapidity": 1.0,
+      "auc": 0.9565478563308716,
+      "auc_std": 1.033529201777128e-06,
+      "draws": 4
+    },
+    {
+      "rapidity": 1.5,
+      "auc": 0.956548273563385,
+      "auc_std": 4.311906138809718e-07,
+      "draws": 4
+    },
+    {
+      "rapidity": 2.0,
+      "auc": 0.9565588235855103,
+      "auc_std": 2.2608632207266055e-05,
+      "draws": 4
+    },
+    {
+      "rapidity": 3.0,
+      "auc": 0.9565120935440063,
+      "auc_std": 0.00016676772793289274,
+      "draws": 4
+    }
+  ],
+  "drop": 3.719329833984375e-05
+}

@@ -1,0 +1,48 @@
+{
+  "model": "so3c_invariant_set",
+  "n_params": 5122,
+  "seed": 0,
+  "n_jets": 20000,
+  "epochs": 8,
+  "n_constituents": 32,
+  "so3c_kwargs": null,
+  "curve": [
+    {
+      "rapidity": 0.0,
+      "auc": 0.9515527486801147,
+      "auc_std": 0.0,
+      "draws": 1
+    },
+    {
+      "rapidity": 0.5,
+      "auc": 0.9515527486801147,
+      "auc_std": 0.0,
+      "draws": 4
+    },
+    {
+      "rapidity": 1.0,
+      "auc": 0.9515526294708252,
+      "auc_std": 3.4584394370540394e-07,
+      "draws": 4
+    },
+    {
+      "rapidity": 1.5,
+      "auc": 0.9515535235404968,
+      "auc_std": 8.940696716308594e-07,
+      "draws": 4
+    },
+    {
+      "rapidity": 2.0,
+      "auc": 0.951567530632019,
+      "auc_std": 2.5741617719177157e-05,
+      "draws": 4
+    },
+    {
+      "rapidity": 3.0,
+      "auc": 0.9514813423156738,
+      "auc_std": 0.0002105139137711376,
+      "draws": 4
+    }
+  ],
+  "drop": 7.140636444091797e-05
+}
