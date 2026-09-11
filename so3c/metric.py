@@ -22,13 +22,21 @@ which drives the geodesic flow dz/dt = -[a]_x z in the activation layer.
 The boost part beta is exactly the imaginary part of the dynamic metric; the
 rotation part rho is the metric-compatible rotational connection.
 
-Equivariance discipline (the central lesson of the so33 paper)
---------------------------------------------------------------
+What feeding invariants does and does not buy
+---------------------------------------------
 The coefficients depend on the state ONLY through the SO(3, C) invariants
-s = (Re z.z, Im z.z). Any dependence on raw coordinates would silently break
-the group structure — this is the complexified analogue of the eta-bound
-result in the parent work (Euclidean bound: OOD AUC 0.663; invariant bound:
-1.000).
+s = (Re z.z, Im z.z), so a(s) is constant along a flow line and z.z is
+conserved exactly. Dependence on raw coordinates would lose even that — the
+complexified analogue of the eta-bound result in the parent work (Euclidean
+bound: OOD AUC 0.663; invariant bound: 1.000).
+
+It does NOT make the flow equivariant. Under z -> Qz the invariants, and
+hence a, do not move, while equivariance needs a -> Q a: exp(-T [a]_x) Q z
+differs from Q exp(-T [a]_x) z whenever Q does not commute with [a]_x. A
+readout that pairs two flowed states (z_a . z_b, cross-channel products) is
+therefore not invariant once a != 0. An equivariant flow needs a covariant
+connection built from several states — see SO3CCovariantSetClassifier in
+benchmarks/so3c_models.py and SO3CInteraction.
 
 Initialisation: the final linear layer starts at zero, so a(s) = 0 and the
 induced flow is the identity map — training moves away from a safe start.

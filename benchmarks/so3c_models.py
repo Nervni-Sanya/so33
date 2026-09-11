@@ -12,13 +12,13 @@ so33 benchmarks:
 - EtaOnlyClassifier        : reads only Re(z.z) = v^T eta v — what an
   eta-based (so33-style) invariant readout sees on complexified data.
   Structurally blind to labels carried by Im(z.z).
-- SO3CFlowClassifier       : equivariant feature extractor — complex channel
-  lift, per-channel SO3CActivation geodesic flow, cross-channel invariant
-  readout. Exactly invariant end-to-end; the flow is load-bearing because
-  cross-channel invariants z_c(T) . z_d(T) are NOT conserved (only each
-  channel's own z_c . z_c is), so the readout is strictly richer than the
-  input invariants. This realises the "expand channels, not the metric"
-  capacity direction.
+- SO3CFlowClassifier       : complex channel lift, per-channel SO3CActivation
+  geodesic flow, cross-channel readout z_c(T) . z_d(T). Invariant only while
+  its connection is zero (at initialisation): the connection is built from
+  invariants, so it does not transform under z -> Qz, and the cross-channel
+  products it reads are not conserved. With a live connection the logits
+  move under SO(3, C); see SO3CCovariantSetClassifier for the mechanism and
+  the fix. Kept because the synthetic boost-OOD results were measured on it.
 """
 
 from __future__ import annotations
@@ -223,14 +223,19 @@ class SO3CInvariantSetClassifier(nn.Module):
 
 
 class SO3CEquivariantSetClassifier(nn.Module):
-    """Arch B done right: bivector lift -> channel lift -> shared geodesic
-    flow -> pooled invariant readout WITH pairwise and cross-channel terms.
+    """Bivector lift -> channel lift -> shared geodesic flow -> pooled
+    readout WITH pairwise and cross-channel terms.
 
-    Every step is exactly equivariant / invariant: complex channel scalars
-    commute with the group action, the flow's connection is built from
-    invariants, and the readout consumes only complex bilinear invariants.
-    The flow is load-bearing: it de-simplifies the bivectors, populating
-    Im features and cross-channel invariants that are trivial at the input.
+    NOT Lorentz-invariant once trained, despite the name. The flow's
+    connection is built from invariants, so under z -> Qz it does not move
+    and the flow applies the same rotation in the new frame instead of the
+    conjugated one. Each particle's own z.z survives; the pairwise and
+    cross-channel products the readout depends on do not. A model trained
+    for 8 epochs on 20k jets falls from AUC 0.9424 to 0.6052 +- 0.1954 at
+    boost scale 2 (results_boost/). It is invariant only at initialisation,
+    where the zero-init connection makes the flow the identity. Kept to
+    reproduce the numbers measured on it; SO3CCovariantSetClassifier is the
+    equivariant replacement.
     """
 
     def __init__(
@@ -846,17 +851,27 @@ class EtaOnlyClassifier(nn.Module):
 
 
 class SO3CFlowClassifier(nn.Module):
-    """Equivariant multi-channel geodesic-flow classifier.
+    """Multi-channel geodesic-flow classifier (synthetic boost-OOD task).
 
-    Pipeline (every step commutes with, or is invariant under, SO(3, C)):
+    Pipeline:
       1. Channel lift  z_c = w_c z  with learnable complex scalars w_c —
          scalar weights act on the channel index, the group on the vector
          index, so the lift is exactly equivariant.
       2. Shared SO3CActivation applied per channel (exact closed-form mode).
          Each channel flows differently because its connection a(s(z_c))
          sees a different invariant s(z_c) = w_c^2 (z . z).
-      3. Readout: all pairwise cross-channel invariants z_c(T) . z_d(T)
+      3. Readout: all pairwise cross-channel products z_c(T) . z_d(T)
          (arcsinh-normalised Re/Im) -> MLP -> logits.
+
+    Step 2 loses invariance once training moves the connection away from
+    zero: a(s) does not transform under z -> Qz, and
+    z_c(T) . z_d(T) = w_c w_d z^T exp(T [a_c]_x) exp(-T [a_d]_x) z changes
+    whenever Q does not commute with that product. With a non-zero
+    connection the logits move by ~1e-2 to 1e-1 under an SO(3, C) boost;
+    the recorded OOD AUC (0.9962 against 1.000 for SO3CInvariantsClassifier)
+    is consistent with that. tests/test_so3c_models.py::
+    test_classifier_invariance checks a freshly built model, whose flow is
+    the identity.
     """
 
     def __init__(
