@@ -27,6 +27,9 @@ class TrainConfig:
     weight_decay: float = 0.0
     grad_clip: float = 1.0
     cosine_schedule: bool = True
+    optimizer: str = "adam"              # "adam" | "adamw"
+    schedule: str = "cosine"             # "cosine" | "lorentznet"
+    warmup_epochs: int = 4               # used by schedule="lorentznet"
     early_stop_patience: int | None = None    # epochs without val improvement
     seed: int = 0
     device: str = "cpu"
@@ -79,6 +82,31 @@ def forward_in_chunks(
                       for i in range(0, len(X), chunk_size)], dim=0)
 
 
+def lorentznet_lr_factor(epoch: int, total_epochs: int, warmup: int = 4,
+                         t0: int = 4, t_mult: int = 2, decay_epochs: int = 3,
+                         gamma: float = 0.5) -> float:
+    """Learning-rate multiplier of the LorentzNet / PELICAN training recipe.
+
+    Both papers train for 35 epochs: 4 epochs of linear warm-up, 28 epochs of
+    cosine annealing with warm restarts (T_0 = 4, T_mult = 2, so cycles of 4,
+    8 and 16 epochs), then 3 epochs of exponential decay with gamma = 0.5
+    (LorentzNet arXiv:2201.08187 p.9; PELICAN arXiv:2307.16506 p.12). epoch is
+    the 0-based index of the epoch about to run, as LambdaLR passes it. For
+    other run lengths the cosine span absorbs the difference.
+    """
+    import math
+    if warmup > 0 and epoch < warmup:
+        return (epoch + 1) / warmup
+    span = max(total_epochs - warmup - decay_epochs, 0)
+    if epoch < warmup + span:
+        t, period = epoch - warmup, t0
+        while t >= period:
+            t -= period
+            period *= t_mult
+        return 0.5 * (1.0 + math.cos(math.pi * t / period))
+    return gamma ** (epoch - (warmup + span) + 1)
+
+
 def train_classifier(
     model: nn.Module,
     X_train: torch.Tensor,
@@ -109,14 +137,28 @@ def train_classifier(
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    optimizer = torch.optim.Adam(
+    optimizers = {"adam": torch.optim.Adam, "adamw": torch.optim.AdamW}
+    if cfg.optimizer not in optimizers:
+        raise ValueError(f"unknown optimizer {cfg.optimizer!r}")
+    optimizer = optimizers[cfg.optimizer](
         [p for p in model.parameters() if p.requires_grad],
         lr=cfg.lr, weight_decay=cfg.weight_decay,
     )
-    scheduler: torch.optim.lr_scheduler.LRScheduler | None = (
-        torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.epochs)
-        if cfg.cosine_schedule else None
-    )
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None
+    if not cfg.cosine_schedule:
+        scheduler = None
+    elif cfg.schedule == "lorentznet":
+        # Stepped once per epoch like the cosine schedule; a lambda is not
+        # saved in the scheduler state, but last_epoch is, and the lambda is
+        # rebuilt from cfg on resume.
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lambda e: lorentznet_lr_factor(e, cfg.epochs, cfg.warmup_epochs))
+    elif cfg.schedule == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=cfg.epochs)
+    else:
+        raise ValueError(f"unknown schedule {cfg.schedule!r}")
     criterion = nn.CrossEntropyLoss()
 
     if device.type == "cuda":

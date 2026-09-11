@@ -413,6 +413,57 @@ def test_message_set_neighbour_graph_is_equivariant() -> None:
         print(f"  ✓ so3c_message_set(kNN) equivariant at boost {boost} ({err:.1e})")
 
 
+def test_message_set_beams_are_covariant_inputs() -> None:
+    """With beam particles the architecture stays exactly Lorentz covariant.
+
+    LorentzNet and PELICAN append two beam particles (1, 0, 0, +-1) so the
+    network can see lab-frame energies and transverse momenta. They enter as
+    ordinary 4-vectors, so moving the jet AND the beams by one Lorentz matrix
+    must leave the logits unchanged. Moving the jet alone must change them --
+    otherwise the beams are not wired in -- except for a rotation about the
+    beam axis, which fixes both beam vectors.
+    """
+    from benchmarks.models import build_model
+    from so3c.lift import lorentz_matrix, random_lorentz_pair
+
+    gen = torch.Generator().manual_seed(33)
+    x = _random_jets(6, 12, gen)
+    torch.manual_seed(5)
+    m = build_model("so3c_message_set", in_features=4, out_features=2,
+                    representation="constituents",
+                    so3c_kwargs={"beams": True}).eval()
+    with torch.no_grad():
+        for r in range(m.rounds):
+            m.w_head[r].weight.normal_(0, 0.5, generator=gen)
+            m.w_head[r].bias.normal_(0, 0.5, generator=gen)
+            m.mix[r].normal_(0, 0.3, generator=gen)
+        beams = m.beam_p4.clone()
+        base = m(x)
+
+        L, _ = random_lorentz_pair(rot_scale=1.0, boost_scale=1.0, generator=gen)
+        x_t = torch.cat([x[..., :4] @ L.T, x[..., 4:]], dim=-1)
+        jet_only = (m(x_t) - base).abs().max().item()
+        m.beam_p4.copy_(beams @ L.T)
+        joint = (m(x_t) - base).abs().max().item()
+        m.beam_p4.copy_(beams)
+
+        theta = torch.tensor(0.7, dtype=torch.float64)
+        zero = torch.zeros((), dtype=torch.float64)
+        R = lorentz_matrix(torch.stack([zero, zero, theta]),
+                           torch.zeros(3, dtype=torch.float64))
+        x_r = torch.cat([x[..., :4] @ R.T, x[..., 4:]], dim=-1)
+        z_rot = (m(x_r) - base).abs().max().item()
+
+    assert joint < 1e-6, f"jet and beams moved together changed the logits: {joint:.2e}"
+    assert jet_only > 1e-3, f"moving the jet alone changed nothing: beams not wired in ({jet_only:.2e})"
+    assert z_rot < 1e-6, f"a rotation about the beam axis changed the logits: {z_rot:.2e}"
+
+    m.train()
+    m(x).sum().backward()
+    assert m.h_init.weight.grad is not None and m.h_init.weight.grad.abs().sum() > 0
+    print(f"  ✓ beams: joint {joint:.1e}, jet only {jet_only:.1e}, z-rotation {z_rot:.1e}")
+
+
 if __name__ == "__main__":
     print("\n── so3c benchmark-model tests ──")
     test_generator_invariants()
@@ -426,4 +477,5 @@ if __name__ == "__main__":
     test_covariant_set_is_equivariant_when_excited()
     test_message_set_is_equivariant_when_excited()
     test_message_set_neighbour_graph_is_equivariant()
+    test_message_set_beams_are_covariant_inputs()
     print("All so3c model tests passed.\n")

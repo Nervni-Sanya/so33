@@ -890,6 +890,122 @@ if rows:
     _finalise(cells, NB_DIR / "kaggle_message_sweep.ipynb")
 
 
+def build_beams_probe(blob: str) -> None:
+    """Beams and the SOTA training recipe, separately and together.
+
+    The capacity sweep showed that more of this architecture buys nothing.
+    What both SOTA taggers have and this model lacks is information and a
+    recipe, not capacity:
+
+    * beams -- LorentzNet (arXiv:2201.08187 p.9) and PELICAN
+      (arXiv:2307.16506 pp.8-9) append two beam particles (1, 0, 0, +-1).
+      Their dot products with the constituents give the network lab-frame
+      energies and transverse momenta, which no Lorentz invariant of the jet
+      alone can supply;
+    * recipe -- LorentzNet trains with AdamW (weight decay 0.01), dropout
+      0.2 before the decoder, and 35 epochs of linear warm-up, cosine
+      restarts and an exponential tail from lr 1e-3; PELICAN (p.12) uses the
+      same schedule. This model has only ever trained with Adam at 3e-3, no
+      weight decay and no dropout.
+
+    Protocol is the earlier probe's (K=32, canonical splits, 400k train jets,
+    batch 256, float32, seed 0), so the rows compose with the anchor
+    rounds=3 / channels=4 at 0.9786 / 585 over 20 epochs. The beams row keeps
+    20 epochs and the anchor recipe, so it isolates the beams. The recipe
+    rows run the published 35 epochs, so their difference from the anchor
+    carries the length as well as the optimiser, and the summary says so.
+
+    A one-epoch smoke run with beams and the full recipe goes first and must
+    write a result, so a shape or device error costs minutes, not the
+    session.
+    """
+    common = [
+        "--cache-dir", "DATA", "--representation", "constituents",
+        "--canonical-splits", "--normalize", "global",
+        "--max-train-samples", "400000",
+        "--seed", "0", "--device", "cuda", "--dtype", "float32",
+        "--batch-size", "256", "--n-constituents", "32",
+        "--eval-chunk-size", "2048", "--models", "so3c_message_set",
+        "--rounds", "3",
+    ]
+    recipe = ["--optimizer", "adamw", "--weight-decay", "0.01", "--lr", "1e-3",
+              "--schedule", "lorentznet", "--warmup-epochs", "4",
+              "--dropout", "0.2"]
+    configs = [
+        ("beams", ["--epochs", "20", "--beams"]),
+        ("recipe", ["--epochs", "35"] + recipe),
+        ("beams_recipe", ["--epochs", "35", "--beams"] + recipe),
+    ]
+    cells = [
+        md("""
+# Beams and the SOTA recipe
+
+The anchor message-passing model scores 0.9786 / 585 on this protocol, and
+no amount of extra capacity moved it. LorentzNet and PELICAN both feed their
+networks two beam particles and train with AdamW, dropout and a warm-up /
+cosine-restart schedule. This probe adds each, and both.
+"""),
+        code("""
+import subprocess
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader"], capture_output=True,
+                     text=True).stdout.strip())
+"""),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code(GPU_SETUP),
+        code("""
+import glob, pathlib
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+assert cands, "attach the K=128 data-prep kernel output"
+DATA = str(pathlib.Path(cands[0]).parent)
+OUT = "/kaggle/working/results_beams_probe"
+CKPT = "/kaggle/working/checkpoints"
+COMMON = %r
+COMMON[COMMON.index("DATA")] = DATA
+CONFIGS = %r
+print("data:", DATA)
+""" % (common, configs)),
+        code("""
+# Smoke: beams and the whole recipe for one epoch on 20k jets. It has to
+# write a result before the real rows are allowed to start.
+import glob
+smoke = list(COMMON)
+smoke[smoke.index("400000")] = "20000"
+flags = [f for f in CONFIGS[2][1] if f not in ("--epochs", "35")]
+run(["benchmarks.run_top_tagging"] + smoke + ["--epochs", "1"] + flags +
+    ["--results-dir", "/kaggle/working/smoke"])
+assert glob.glob("/kaggle/working/smoke/*.json"), "smoke run wrote no result"
+"""),
+        code("""
+for tag, extra in CONFIGS:
+    print("=== %s ===" % tag, flush=True)
+    run(["benchmarks.run_top_tagging"] + COMMON + extra +
+        ["--results-dir", OUT + "/" + tag,
+         "--ckpt-dir", CKPT + "/" + tag, "--resume",
+         "--max-seconds", "26000"])
+"""),
+        code("""
+import json, glob
+print("%-14s%9s%8s%9s%10s%10s%8s"
+      % ("row", "params", "epochs", "AUC", "rej@0.3", "rej@0.5", "hours"))
+print("%-14s%9d%8d%9.4f%10.0f%10s%8.2f"
+      % ("anchor", 13862, 20, 0.9786, 585, "-", 0.58))
+for tag, extra in CONFIGS:
+    for f in sorted(glob.glob(OUT + "/" + tag + "/*.json")):
+        r = json.load(open(f)); t = r["test_metrics"]
+        print("%-14s%9d%8d%9.4f%10.0f%10.0f%8.2f"
+              % (tag, r["n_params"], r["epochs_run"], t["test_auc"],
+                 t["bg_rej_30"], t.get("bg_rej_50", float("nan")),
+                 r["walltime_sec"] / 3600))
+print()
+print("recipe rows ran 35 epochs against the anchor's 20: their gain")
+print("includes the longer schedule, not only the optimiser.")
+"""),
+    ]
+    _finalise(cells, NB_DIR / "kaggle_beams_probe.ipynb")
+
+
 def build_message(blob: str, seed: int = 0, k: int = 64) -> None:
     """Tier-2 item 5: covariant message passing on the canonical protocol.
 
@@ -1118,6 +1234,7 @@ def main() -> int:
     build_message_probe(blob)
     build_message_sweep(blob)
     build_message_finish(blob)
+    build_beams_probe(blob)
     for k in (32, 64):
         for seed in (0, 1):
             build_message(blob, seed=seed, k=k)

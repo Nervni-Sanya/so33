@@ -29,7 +29,7 @@ import torch.nn as nn
 from so3c.activation import SO3CActivation
 from so3c.algebra import expm_so3c, invariant_features, real_to_complex
 from so3c.interaction import SO3CInteraction
-from so3c.lift import jet_bivectors, minkowski_inner
+from so3c.lift import bivector_lift, jet_bivectors, minkowski_inner
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -548,6 +548,15 @@ class SO3CMessageSetClassifier(nn.Module):
     normalises the input lift by its invariant scale, bounds the connection
     the same way, and mixes channels. Read those two rows as different
     models, not as one ablation.
+
+    Beams. ``beams=True`` appends the two auxiliary beam particles
+    (E, 0, 0, +-E) that LorentzNet and PELICAN feed their networks. Without
+    them the model sees only Lorentz invariants of the jet, so it cannot know
+    any constituent's lab-frame energy or transverse momentum -- information
+    both taggers use. The beams enter as ordinary 4-vectors (a buffer, so a
+    test can transform them), the jet total P stays a sum over real
+    constituents, readouts pool real constituents only, and the architecture
+    remains exactly Lorentz covariant when jet and beams move together.
     """
 
     def __init__(
@@ -562,6 +571,9 @@ class SO3CMessageSetClassifier(nn.Module):
         T: float = 1.0,
         channel_mixing: bool = True,
         neighbors: int | None = None,
+        beams: bool = False,
+        beam_energy: float = 1.0,
+        dropout: float = 0.0,
         dtype: torch.dtype = torch.float64,
     ) -> None:
         super().__init__()
@@ -571,6 +583,15 @@ class SO3CMessageSetClassifier(nn.Module):
         self.scalar_dim = scalar_dim
         self.neighbors = neighbors
         self.T = T
+        self.beams = beams
+        if beams and neighbors is not None:
+            raise ValueError("beams are implemented for the dense graph only")
+        if beams:
+            # A buffer rather than a constant so a test can move the beams
+            # with the jet and check exact covariance.
+            self.register_buffer("beam_p4", torch.tensor(
+                [[beam_energy, 0.0, 0.0, beam_energy],
+                 [beam_energy, 0.0, 0.0, -beam_energy]], dtype=dtype))
 
         gen = torch.Generator().manual_seed(0)
         w = torch.stack([
@@ -581,7 +602,8 @@ class SO3CMessageSetClassifier(nn.Module):
 
         # Scalar states are seeded from per-particle invariants only:
         # Re/Im (z.z) and the Minkowski mass <p, p>.
-        self.h_init = (nn.Linear(3, scalar_dim).to(dtype)
+        # With beams, also <p, b+>, <p, b-> and a constituent/beam label.
+        self.h_init = (nn.Linear(6 if beams else 3, scalar_dim).to(dtype)
                        if scalar_dim else None)
 
         edge_in = 6 * channels + 2 * scalar_dim
@@ -610,12 +632,16 @@ class SO3CMessageSetClassifier(nn.Module):
             self.register_parameter("mix", None)
 
         n_ch_pairs = channels * (channels + 1) // 2
-        in_features = channels * 11 + 2 * n_ch_pairs + 2 * scalar_dim + 7
-        self.mlp = nn.Sequential(
-            nn.Linear(in_features, hidden), nn.ReLU(),
-            nn.Linear(hidden, hidden), nn.ReLU(),
-            nn.Linear(hidden, out_features),
-        ).to(dtype)
+        in_features = (channels * 11 + 2 * n_ch_pairs + 2 * scalar_dim + 7
+                       + ((2 * scalar_dim + 2) if beams else 0))
+        layers = [nn.Linear(in_features, hidden), nn.ReLU()]
+        if dropout > 0:
+            layers.append(nn.Dropout(dropout))
+        layers += [nn.Linear(hidden, hidden), nn.ReLU()]
+        if dropout > 0:
+            layers.append(nn.Dropout(dropout))
+        layers.append(nn.Linear(hidden, out_features))
+        self.mlp = nn.Sequential(*layers).to(dtype)
         iu = torch.triu_indices(channels, channels)
         self.register_buffer("pair_rows", iu[0])
         self.register_buffer("pair_cols", iu[1])
@@ -643,15 +669,37 @@ class SO3CMessageSetClassifier(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.to(self.dtype)
         p4, mask = x[..., :4], x[..., 4]
-        z = jet_bivectors(p4, mask)                              # (B, K, 3)
+        K_real = p4.shape[1]
+        if self.beams:
+            # P stays the jet total over real constituents; the beams join
+            # the set as two extra nodes lifted against the same P, so
+            # bivec(b, P) is covariant like every other state.
+            P = (p4 * mask.unsqueeze(-1)).sum(dim=1, keepdim=True)   # (B, 1, 4)
+            beam = self.beam_p4.unsqueeze(0).expand(p4.shape[0], 2, 4)
+            p4_all = torch.cat([p4 * mask.unsqueeze(-1), beam], dim=1)
+            mask_all = torch.cat([mask, mask.new_ones(p4.shape[0], 2)], dim=1)
+            z = bivector_lift(p4_all, P.expand_as(p4_all))
+        else:
+            p4_all, mask_all = p4, mask
+            z = jet_bivectors(p4, mask)                          # (B, K, 3)
         z = z / self._invariant_scale(z).unsqueeze(-1)
 
         if self.scalar_dim:
             q = (z * z).sum(dim=-1)
-            m2 = minkowski_inner(p4, p4) * mask
-            h = self.h_init(torch.asinh(
-                torch.stack([q.real, q.imag, m2], dim=-1)))      # (B, K, D)
-            h = h * mask.unsqueeze(-1)
+            m2 = minkowski_inner(p4_all, p4_all) * mask_all
+            node_inv = [q.real, q.imag, m2]
+            if self.beams:
+                # <p, b+-> = E -+ p_z (times the beam energy): the lab-frame
+                # energy and longitudinal momentum of each constituent, which
+                # no Lorentz invariant of the jet alone can supply.
+                is_beam = torch.zeros_like(mask_all)
+                is_beam[:, K_real:] = 1.0
+                node_inv += [
+                    minkowski_inner(p4_all, self.beam_p4[0].expand_as(p4_all)),
+                    minkowski_inner(p4_all, self.beam_p4[1].expand_as(p4_all)),
+                    is_beam]
+            h = self.h_init(torch.asinh(torch.stack(node_inv, dim=-1)))
+            h = h * mask_all.unsqueeze(-1)                       # (B, N, D)
         else:
             h = None
 
@@ -661,16 +709,16 @@ class SO3CMessageSetClassifier(nn.Module):
 
         B, C, K, _ = zc.shape
         D = self.scalar_dim
-        node_mask = mask.unsqueeze(-1)
+        node_mask = mask_all.unsqueeze(-1)
         sparse = self.neighbors is not None and self.neighbors < K
         if sparse:
-            idx, edge_mask = self._neighbour_graph(z, mask)      # (B, K, k)
+            idx, edge_mask = self._neighbour_graph(z, mask_all)      # (B, K, k)
             bat = torch.arange(B, device=z.device).view(B, 1, 1)
             k = idx.shape[-1]
             denom = edge_mask.sum(-1).clamp_min(1.0)             # (B, K)
         else:
-            pair_mask = mask.unsqueeze(-1) * mask.unsqueeze(-2)  # (B, K, K)
-            denom = mask.sum(dim=-1).clamp_min(1.0).unsqueeze(-1).expand(B, K)
+            pair_mask = mask_all.unsqueeze(-1) * mask_all.unsqueeze(-2)
+            denom = mask_all.sum(dim=-1).clamp_min(1.0).unsqueeze(-1).expand(B, K)
 
         for r in range(self.rounds):
             if sparse:
@@ -723,16 +771,19 @@ class SO3CMessageSetClassifier(nn.Module):
 
             Q = expm_so3c(a.reshape(-1, 3), t=-self.T)           # (B*C*K, 3, 3)
             zc = (Q @ zc.reshape(-1, 3, 1)).squeeze(-1).reshape(B, C, K, 3)
-            zc = zc * mask[:, None, :, None]
+            zc = zc * mask_all[:, None, :, None]
 
             if self.mix is not None:
                 M = torch.complex(self.mix[r, ..., 0], self.mix[r, ..., 1])
                 zc = torch.einsum("cd,bdkx->bckx", M, zc)
 
+        # Readouts pool the real constituents only; the beams have done their
+        # work through the messages and are added back explicitly below.
+        zr = zc[:, :, :K_real]
         per_ch = torch.stack(
-            [_pooled_bivector_invariants(zc[:, c], mask) for c in range(C)],
+            [_pooled_bivector_invariants(zr[:, c], mask) for c in range(C)],
             dim=1).reshape(B, C * 11)
-        z_tot = (zc * mask[:, None, :, None]).sum(dim=2)         # (B, C, 3)
+        z_tot = (zr * mask[:, None, :, None]).sum(dim=2)         # (B, C, 3)
         T_cc = z_tot @ z_tot.transpose(-1, -2)
         T_pairs = T_cc[:, self.pair_rows, self.pair_cols]
         cross = torch.cat([torch.asinh(T_pairs.real),
@@ -740,12 +791,21 @@ class SO3CMessageSetClassifier(nn.Module):
 
         pooled = []
         if self.scalar_dim:
+            hr, real = h[:, :K_real], mask.unsqueeze(-1)
             n = mask.sum(dim=-1).clamp_min(1.0)
-            pooled = [(h * node_mask).sum(dim=1) / n.unsqueeze(-1),
-                      torch.where(node_mask.bool(), h,
-                                  torch.full_like(h, -1e30)).amax(dim=1)]
+            pooled = [(hr * real).sum(dim=1) / n.unsqueeze(-1),
+                      torch.where(real.bool(), hr,
+                                  torch.full_like(hr, -1e30)).amax(dim=1)]
+        extra = []
+        if self.beams:
+            if self.scalar_dim:
+                extra.append(h[:, K_real:].reshape(B, 2 * D))
+            Pj = P[:, 0]
+            extra.append(torch.asinh(torch.stack([
+                minkowski_inner(Pj, self.beam_p4[0].expand_as(Pj)),
+                minkowski_inner(Pj, self.beam_p4[1].expand_as(Pj))], dim=-1)))
         return self.mlp(torch.cat(
-            [per_ch, cross] + pooled + [_minkowski_stats(p4, mask)],
+            [per_ch, cross] + pooled + [_minkowski_stats(p4, mask)] + extra,
             dim=-1))
 
     def regularization_loss(self) -> torch.Tensor:

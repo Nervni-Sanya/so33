@@ -315,3 +315,58 @@ def test_cuda_resume_restores_rng_state(tmp_path) -> None:
         resume=True))
     assert resumed.epochs_run == 3
     assert len(resumed.history) == 3
+
+
+def test_lorentznet_schedule_matches_the_published_recipe() -> None:
+    """35 epochs: 4 warm-up, cosine restarts over 4/8/16 epochs, 3 decaying.
+
+    LorentzNet arXiv:2201.08187 p.9 and PELICAN arXiv:2307.16506 p.12.
+    """
+    import math
+    from benchmarks.train import lorentznet_lr_factor
+
+    f = [lorentznet_lr_factor(e, 35) for e in range(35)]
+    assert f[:4] == [0.25, 0.5, 0.75, 1.0]
+    for start in (4, 8, 16):                  # each cosine cycle restarts at 1
+        assert abs(f[start] - 1.0) < 1e-12, (start, f[start])
+    assert abs(f[6] - 0.5 * (1 + math.cos(math.pi * 2 / 4))) < 1e-12
+    assert abs(f[31] - 0.5 * (1 + math.cos(math.pi * 15 / 16))) < 1e-12
+    assert f[32:] == [0.5, 0.25, 0.125]
+
+
+def test_adamw_lorentznet_recipe_trains_and_resumes(tmp_path) -> None:
+    """The SOTA recipe runs end to end and a resumed run matches a straight one."""
+    import torch
+    import torch.nn as nn
+    from benchmarks.train import TrainConfig, train_classifier
+
+    class Tiny(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.net = nn.Sequential(nn.Linear(6, 8), nn.ReLU(), nn.Linear(8, 2))
+
+        def forward(self, x):
+            return self.net(x)
+
+        def regularization_loss(self):
+            return torch.zeros(())
+
+    torch.manual_seed(0)
+    X = torch.randn(256, 6)
+    y = (X[:, 0] > 0).long()
+    recipe = dict(epochs=7, batch_size=64, optimizer="adamw", weight_decay=0.01,
+                  schedule="lorentznet", warmup_epochs=2)
+
+    torch.manual_seed(1)
+    straight = train_classifier(Tiny(), X, y, X, y, TrainConfig(**recipe))
+    ckpt = tmp_path / "recipe.pt"
+    torch.manual_seed(1)
+    part = train_classifier(Tiny(), X, y, X, y, TrainConfig(
+        **recipe, ckpt_path=str(ckpt), max_seconds=0.0))
+    assert part.epochs_run == 1
+    torch.manual_seed(1)
+    resumed = train_classifier(Tiny(), X, y, X, y, TrainConfig(
+        **recipe, ckpt_path=str(ckpt), resume=True))
+    assert resumed.epochs_run == straight.epochs_run == 7
+    assert resumed.final_val_acc == straight.final_val_acc
+    assert resumed.final_train_acc == straight.final_train_acc

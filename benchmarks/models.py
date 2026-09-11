@@ -530,7 +530,7 @@ def _build_deepsets(
             # Message-passing-only knobs; harmless to drop for the others so
             # a sweep can pass one kwargs dict across the whole family.
             for k in ("rounds", "scalar_dim", "msg_dim", "channel_mixing",
-                      "neighbors"):
+                      "neighbors", "beams", "beam_energy", "dropout"):
                 extra.pop(k, None)
         if name == "so3c_invariant_set":
             extra.pop("channels", None)      # no channel axis in the no-flow model

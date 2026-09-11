@@ -1,0 +1,15 @@
+{
+  "id": "nsanya/so3c-beams-probe",
+  "title": "SO3C beams probe",
+  "code_file": "kaggle_beams_probe.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [
+    "nsanya/so3c-data-prep-k-128"
+  ]
+}

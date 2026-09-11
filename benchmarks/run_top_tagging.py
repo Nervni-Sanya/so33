@@ -110,6 +110,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--lr", type=float, default=3e-3,
                    help="Adam learning rate (inherited default 3e-3).")
     p.add_argument("--weight-decay", type=float, default=0.0)
+    p.add_argument("--optimizer", choices=["adam", "adamw"], default="adam")
+    p.add_argument("--schedule", choices=["cosine", "lorentznet"],
+                   default="cosine",
+                   help="lorentznet: 4 warm-up epochs, cosine with warm "
+                        "restarts, 3 decaying epochs -- the recipe LorentzNet "
+                        "and PELICAN train with over 35 epochs.")
+    p.add_argument("--warmup-epochs", type=int, default=4)
+    p.add_argument("--beams", action="store_true",
+                   help="so3c_message_set: add the two beam particles "
+                        "(1, 0, 0, +-1) LorentzNet and PELICAN use, so the "
+                        "network can see lab-frame energies and momenta.")
+    p.add_argument("--dropout", type=float, default=None,
+                   help="so3c_message_set: dropout in the readout MLP.")
     p.add_argument("--ckpt-dir", type=str, default=None,
                    help="Directory for training checkpoints; --resume needs it.")
     p.add_argument("--resume", action="store_true",
@@ -166,6 +179,8 @@ def main(argv: list[str] | None = None) -> int:
         ("msg_dim", args.msg_dim),
         ("neighbors", args.neighbors),
         ("T", args.flow_T),
+        ("beams", True if args.beams else None),
+        ("dropout", args.dropout),
     ) if v is not None} or None
 
     kwargs = dict(
@@ -182,6 +197,9 @@ def main(argv: list[str] | None = None) -> int:
         batch_size=args.batch_size,
         lr=args.lr,
         weight_decay=args.weight_decay,
+        optimizer=args.optimizer,
+        schedule=args.schedule,
+        warmup_epochs=args.warmup_epochs,
         so3c_kwargs=so3c_kwargs,
         ckpt_dir=args.ckpt_dir,
         resume=args.resume,

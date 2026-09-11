@@ -99,6 +99,9 @@ def run_tabular_experiment(
     batch_size: int = 128,
     lr: float = 3e-3,
     weight_decay: float = 0.0,
+    optimizer: str = "adam",
+    schedule: str = "cosine",
+    warmup_epochs: int = 4,
     natural_hidden: int = 256,
     T: float = 0.3,
     representation: str = "flat",
@@ -177,6 +180,8 @@ def run_tabular_experiment(
         cfg = TrainConfig(
             epochs=epochs, batch_size=batch_size, lr=lr,
             weight_decay=weight_decay,
+            optimizer=optimizer, schedule=schedule,
+            warmup_epochs=warmup_epochs,
             seed=seed, cosine_schedule=True, grad_clip=1.0,
             device=device, eval_chunk_size=eval_chunk_size,
             ckpt_path=str(ckpt_path) if ckpt_path else None,
