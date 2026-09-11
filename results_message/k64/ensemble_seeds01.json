@@ -1,0 +1,25 @@
+{
+  "results_dir": "results_message\\k64",
+  "model": "so3c_message_set",
+  "experiment": "top_tagging_canonical",
+  "members": [
+    {
+      "seed": 0,
+      "auc": 0.9807666341473881,
+      "bg_rej_30": 889.488986784141,
+      "bg_rej_50": 235.60560093348892
+    },
+    {
+      "seed": 1,
+      "auc": 0.9806781797763902,
+      "bg_rej_30": 810.8995983935744,
+      "bg_rej_50": 230.49543378995435
+    }
+  ],
+  "ensemble": {
+    "auc": 0.9810908721117559,
+    "bg_rej_30": 901.4017857142857,
+    "bg_rej_50": 240.08799048751487
+  },
+  "mean_score_correlation": 0.9952657682063403
+}
