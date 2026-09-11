@@ -28,7 +28,10 @@ import tarfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 NB_DIR = ROOT / "notebooks"
-CODE_PACKAGES = ("so3c", "benchmarks", "so33")
+# tests/ ships too: the finish kernel runs the CUDA resume test on the card
+# before its real runs, and without the directory pytest found nothing
+# to run and the guard stopped the session.
+CODE_PACKAGES = ("so3c", "benchmarks", "so33", "tests")
 
 
 def _src(text: str) -> list[str]:
