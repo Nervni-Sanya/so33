@@ -1,0 +1,15 @@
+{
+  "id": "nsanya/so3c-beams-tuning",
+  "title": "SO3C beams tuning",
+  "code_file": "kaggle_beams_tuning.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [
+    "nsanya/so3c-data-prep-k-128"
+  ]
+}

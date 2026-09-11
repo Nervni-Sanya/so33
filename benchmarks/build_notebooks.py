@@ -1006,6 +1006,110 @@ print("includes the longer schedule, not only the optimiser.")
     _finalise(cells, NB_DIR / "kaggle_beams_probe.ipynb")
 
 
+def build_beams_tuning(blob: str) -> None:
+    """One knob at a time, on top of beams.
+
+    Beams moved the probe protocol from 0.9786 / 585 to 0.98088 / 767.7 at
+    equal epochs, and they are now the baseline. The published LorentzNet /
+    PELICAN recipe was a negative result (0.97769 / 542.8 on its own,
+    0.98065 / 701.1 with beams) but it changed the optimiser, the weight
+    decay, the dropout, the schedule and the epoch count together, so it
+    says nothing about which of them hurt. Each row here changes one thing:
+
+      e35  35 epochs with the anchor optimiser and schedule -- the recipe
+           rows ran 35 epochs, so their comparison confounded length with
+           optimiser; this isolates length.
+      c8   channels 8. The capacity sweep found saturation, but it ran
+           WITHOUT beams: parameters could not use information the inputs
+           never carried. Worth re-asking now that they do.
+      lr6  lr 6e-3 against the inherited 3e-3, which was never tuned. The
+           recipe's 1e-3 went the other way and lost.
+      reg  dropout 0.05 and weight decay 1e-4: the recipe's 0.2 and 0.01
+           are sized for 200k-parameter models, not 15k.
+
+    Protocol stays the probe's (K=32, canonical splits, 400k train jets,
+    batch 256, float32, seed 0) so every row composes with the ones already
+    measured. About 3.4 GPU-hours in total.
+    """
+    common = [
+        "--cache-dir", "DATA", "--representation", "constituents",
+        "--canonical-splits", "--normalize", "global",
+        "--max-train-samples", "400000",
+        "--seed", "0", "--device", "cuda", "--dtype", "float32",
+        "--batch-size", "256", "--n-constituents", "32",
+        "--eval-chunk-size", "2048", "--models", "so3c_message_set",
+        "--rounds", "3", "--beams",
+    ]
+    configs = [
+        ("e35", ["--epochs", "35"]),
+        ("c8", ["--epochs", "20", "--channels", "8"]),
+        ("lr6", ["--epochs", "20", "--lr", "6e-3"]),
+        ("reg", ["--epochs", "20", "--dropout", "0.05", "--weight-decay", "1e-4"]),
+    ]
+    cells = [
+        md("""
+# Beams, then one knob at a time
+
+Beams are the new baseline: 0.98088 AUC and 767.7 background rejection on
+this protocol, against 0.9786 / 585 without them. The published training
+recipe lost to the anchor even with 75% more epochs, and it moved five
+knobs at once. These four rows move one each: epochs, channels, learning
+rate, and mild regularisation.
+"""),
+        code("""
+import subprocess
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader"], capture_output=True,
+                     text=True).stdout.strip())
+"""),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code(GPU_SETUP),
+        code("""
+import glob, pathlib
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+assert cands, "attach the K=128 data-prep kernel output"
+DATA = str(pathlib.Path(cands[0]).parent)
+OUT = "/kaggle/working/results_beams_tuning"
+CKPT = "/kaggle/working/checkpoints"
+COMMON = %r
+COMMON[COMMON.index("DATA")] = DATA
+CONFIGS = %r
+print("data:", DATA)
+""" % (common, configs)),
+        code("""
+for tag, extra in CONFIGS:
+    print("=== %s ===" % tag, flush=True)
+    run(["benchmarks.run_top_tagging"] + COMMON + extra +
+        ["--results-dir", OUT + "/" + tag,
+         "--ckpt-dir", CKPT + "/" + tag, "--resume",
+         "--max-seconds", "26000"])
+"""),
+        code("""
+import json, glob
+print("%-8s%9s%8s%9s%10s%10s%8s"
+      % ("row", "params", "epochs", "AUC", "rej@0.3", "rej@0.5", "hours"))
+print("%-8s%9d%8d%9.5f%10.1f%10s%8.2f" % ("anchor", 13862, 20, 0.9786, 585.0, "-", 0.58))
+print("%-8s%9d%8d%9.5f%10.1f%10.1f%8.2f" % ("beams", 15038, 20, 0.98088, 767.7, 207.7, 0.64))
+best = None
+for tag, extra in CONFIGS:
+    for f in sorted(glob.glob(OUT + "/" + tag + "/*.json")):
+        r = json.load(open(f)); t = r["test_metrics"]
+        print("%-8s%9d%8d%9.5f%10.1f%10.1f%8.2f"
+              % (tag, r["n_params"], r["epochs_run"], t["test_auc"],
+                 t["bg_rej_30"], t.get("bg_rej_50", float("nan")),
+                 r["walltime_sec"] / 3600))
+        if best is None or t["test_auc"] > best[1]:
+            best = (tag, t["test_auc"], t["bg_rej_30"])
+if best:
+    print()
+    print("best row %s: %+.5f AUC and %+.1f rejection against beams alone"
+          % (best[0], best[1] - 0.98088, best[2] - 767.7))
+"""),
+    ]
+    _finalise(cells, NB_DIR / "kaggle_beams_tuning.ipynb")
+
+
 def build_message(blob: str, seed: int = 0, k: int = 64) -> None:
     """Tier-2 item 5: covariant message passing on the canonical protocol.
 
@@ -1235,6 +1339,7 @@ def main() -> int:
     build_message_sweep(blob)
     build_message_finish(blob)
     build_beams_probe(blob)
+    build_beams_tuning(blob)
     for k in (32, 64):
         for seed in (0, 1):
             build_message(blob, seed=seed, k=k)
