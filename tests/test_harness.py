@@ -269,3 +269,49 @@ def test_max_seconds_caps_the_session_not_the_run(tmp_path) -> None:
         "resumed session stopped at epoch %d: max_seconds was compared with "
         "the cumulative clock, not this session's" % resumed.epochs_run)
     assert resumed.walltime_sec > 1e6    # the recorded clock still accumulates
+
+
+def test_cuda_resume_restores_rng_state(tmp_path) -> None:
+    """Resuming on a GPU must get past restoring the saved RNG state.
+
+    train_classifier loaded checkpoints with map_location=device, which put
+    the saved CPU and CUDA RNG states on the GPU as well. torch.set_rng_state
+    and torch.cuda.set_rng_state both require a CPU ByteTensor, so every GPU
+    resume died with "RNG state must be a torch.ByteTensor" before a single
+    step -- the K=64 finish kernel lost both seeds that way. On CPU,
+    map_location is already the CPU, so only a CUDA test can see this.
+    """
+    import pytest
+    import torch
+    import torch.nn as nn
+    from benchmarks.train import TrainConfig, train_classifier
+
+    if not torch.cuda.is_available():
+        pytest.skip("needs CUDA: the failure only exists when the RNG state lands on the GPU")
+
+    class Tiny(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.net = nn.Sequential(nn.Linear(6, 8), nn.ReLU(), nn.Linear(8, 2))
+
+        def forward(self, x):
+            return self.net(x)
+
+        def regularization_loss(self):
+            return torch.zeros((), device=self.net[0].weight.device)
+
+    torch.manual_seed(0)
+    X = torch.randn(256, 6)
+    y = (X[:, 0] > 0).long()
+    ckpt = tmp_path / "cuda_resume.pt"
+
+    part = train_classifier(Tiny(), X, y, X, y, TrainConfig(
+        epochs=3, batch_size=64, device="cuda", ckpt_path=str(ckpt),
+        max_seconds=0.0))
+    assert part.epochs_run == 1
+
+    resumed = train_classifier(Tiny(), X, y, X, y, TrainConfig(
+        epochs=3, batch_size=64, device="cuda", ckpt_path=str(ckpt),
+        resume=True))
+    assert resumed.epochs_run == 3
+    assert len(resumed.history) == 3

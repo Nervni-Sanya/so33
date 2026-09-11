@@ -1013,6 +1013,15 @@ def build_message_finish(blob: str) -> None:
     compare the cumulative clock, and these two runs are already past the
     cap (26026 s and 26068 s against 26000), so each would have trained
     epoch 29 and stopped again.
+
+    The first attempt at this kernel lost both seeds in about a minute to a
+    second resume bug that only exists on a GPU: checkpoints were loaded
+    with map_location=device, which moved the saved RNG states onto CUDA,
+    and torch.set_rng_state rejects anything but a CPU ByteTensor. Its
+    summary cell also passed silently with zero result files. So this
+    version runs the CUDA resume test on the card before the real runs and
+    requires it to pass rather than skip, asserts each run succeeded, and
+    requires both result files to exist.
     """
     cells = [
         md("""
@@ -1048,11 +1057,22 @@ for seed in (0, 1):
 print("data:", DATA)
 """),
         code("""
+# Exercise a real CUDA resume before committing the session to the runs.
+# A skip would look green, so require an actual pass.
+import subprocess, sys
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "pytest"], check=True)
+r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-rs", "tests/test_harness.py",
+                    "-k", "cuda_resume"], cwd="/kaggle/working/repo",
+                   capture_output=True, text=True)
+print(r.stdout[-3000:]); print(r.stderr[-2000:])
+assert r.returncode == 0 and "1 passed" in r.stdout, "CUDA resume test did not pass; not starting the runs"
+"""),
+        code("""
 import time
 for seed in ("0", "1"):
     print("=== seed %s ===" % seed, flush=True)
     t_seed = time.perf_counter()
-    run(["benchmarks.run_top_tagging",
+    ok = run(["benchmarks.run_top_tagging",
          "--cache-dir", DATA, "--representation", "constituents",
          "--canonical-splits", "--epochs", "30", "--normalize", "global",
          "--seed", seed, "--device", "cuda", "--dtype", "float32",
@@ -1063,12 +1083,15 @@ for seed in ("0", "1"):
          "--results-dir", OUT, "--ckpt-dir", str(CKPT),
          "--resume", "--max-seconds", "26000"])
     print("seed %s: this session took %.1f min" % (seed, (time.perf_counter() - t_seed) / 60))
+    assert ok, "seed %s failed; see the output above" % seed
 """),
         code("""
 import json, glob
 EPOCH28 = {0: (0.98074, 893.4), 1: (0.98065, 817.5)}
+FILES = sorted(glob.glob(OUT + "/*.json"))
+assert len(FILES) == 2, "expected 2 result files, found %d" % len(FILES)
 print("%-6s%8s%10s%10s%10s%12s%8s" % ("seed", "epochs", "AUC", "rej@0.3", "AUC@28", "rej@28", "hours"))
-for f in sorted(glob.glob(OUT + "/*.json")):
+for f in FILES:
     r = json.load(open(f)); t = r["test_metrics"]
     hours = r.get("walltime_sec", 0) / 3600   # cumulative across sessions
     a28, j28 = EPOCH28[r["seed"]]

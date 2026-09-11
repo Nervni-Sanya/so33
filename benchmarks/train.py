@@ -136,14 +136,20 @@ def train_classifier(
     # replay a different shuffle sequence than an uninterrupted run.
     ckpt_file = pathlib.Path(cfg.ckpt_path) if cfg.ckpt_path else None
     if cfg.resume and ckpt_file is not None and ckpt_file.is_file():
-        state = torch.load(ckpt_file, map_location=device, weights_only=False)
+        # Load onto the CPU. map_location=device would also move the saved
+        # RNG states, and torch.set_rng_state / torch.cuda.set_rng_state both
+        # require a CPU ByteTensor: on a GPU every resume died with "RNG state
+        # must be a torch.ByteTensor" before training a single step, which
+        # the CPU-only tests could never see. load_state_dict moves model and
+        # optimizer tensors onto the parameters' device by itself.
+        state = torch.load(ckpt_file, map_location="cpu", weights_only=False)
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         if scheduler is not None and state.get("scheduler") is not None:
             scheduler.load_state_dict(state["scheduler"])
-        torch.set_rng_state(state["cpu_rng"])
+        torch.set_rng_state(state["cpu_rng"].cpu())
         if device.type == "cuda" and state.get("cuda_rng") is not None:
-            torch.cuda.set_rng_state(state["cuda_rng"], device)
+            torch.cuda.set_rng_state(state["cuda_rng"].cpu(), device)
         start_epoch = state["epoch"] + 1
         best_val_acc = state["best_val_acc"]
         epochs_no_improve = state["epochs_no_improve"]
