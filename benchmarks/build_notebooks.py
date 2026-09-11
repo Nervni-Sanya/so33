@@ -987,6 +987,99 @@ for f in sorted(glob.glob(OUT + "/*.json")):
     _finalise(cells, NB_DIR / ("kaggle_message_k%d_seed%d.ipynb" % (k, seed)))
 
 
+def build_message_finish(blob: str) -> None:
+    """Finish the two K=64 message-passing runs that stopped at epoch 28.
+
+    Both hit --max-seconds 26000 at epoch 28 of 30. The per-epoch cost at
+    K=64 is 930 s, 4.7x the covariant model, not the 3.05x measured at K=32
+    that the cap was sized from. train.py writes a checkpoint every epoch
+    before it checks the time limit, so the epoch-28 state exists, in each
+    kernel's output under checkpoints/.
+
+    A new Kaggle session starts with an empty /kaggle/working, so --resume
+    on its own would find no checkpoint and train from epoch 1 again. This
+    kernel mounts both runs as inputs, copies each checkpoint to the path
+    the runner derives (ckpt_dir / "{experiment}__{model}__seed{seed}.pt"),
+    and resumes. train.py restores model, optimizer, cosine scheduler and
+    RNG state and starts at epoch 29, so epochs 29-30 run as they would have
+    in one session.
+
+    Results go to results_message_e30, so they cannot be mistaken for the
+    epoch-28 files. The summary cell refuses to report a run that did not
+    reach 30 epochs. Wall clock in the result JSON is cumulative across
+    sessions, so each resume's own session time is printed separately.
+
+    This relies on train.py capping --max-seconds per session. It used to
+    compare the cumulative clock, and these two runs are already past the
+    cap (26026 s and 26068 s against 26000), so each would have trained
+    epoch 29 and stopped again.
+    """
+    cells = [
+        md("""
+# Finish K=64 message passing: epochs 29-30
+
+Both anchor-configuration runs stopped at epoch 28 on the time cap, with
+AUC 0.98074 / 0.98065 and rejection 893 / 818. The cosine schedule had two
+epochs left to anneal. This resumes each from its epoch-28 checkpoint.
+"""),
+        code("""
+import subprocess
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader"], capture_output=True,
+                     text=True).stdout.strip())
+"""),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code(GPU_SETUP),
+        code("""
+import glob, pathlib, shutil
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+assert cands, "attach the K=128 data-prep kernel output"
+DATA = str(pathlib.Path(cands[0]).parent)
+OUT = "/kaggle/working/results_message_e30"
+CKPT = pathlib.Path("/kaggle/working/checkpoints")
+CKPT.mkdir(parents=True, exist_ok=True)
+for seed in (0, 1):
+    name = "top_tagging_canonical__so3c_message_set__seed%d.pt" % seed
+    found = glob.glob("/kaggle/input/**/checkpoints/" + name, recursive=True)
+    assert found, "attach nsanya/so3c-message-k64-seed%d: no checkpoint %s" % (seed, name)
+    shutil.copy(found[0], CKPT / name)
+    print("seed %d: %s (%d bytes)" % (seed, found[0], (CKPT / name).stat().st_size))
+print("data:", DATA)
+"""),
+        code("""
+import time
+for seed in ("0", "1"):
+    print("=== seed %s ===" % seed, flush=True)
+    t_seed = time.perf_counter()
+    run(["benchmarks.run_top_tagging",
+         "--cache-dir", DATA, "--representation", "constituents",
+         "--canonical-splits", "--epochs", "30", "--normalize", "global",
+         "--seed", seed, "--device", "cuda", "--dtype", "float32",
+         "--batch-size", "256", "--n-constituents", "64",
+         "--rounds", "3",
+         "--eval-chunk-size", "1024",
+         "--models", "so3c_message_set",
+         "--results-dir", OUT, "--ckpt-dir", str(CKPT),
+         "--resume", "--max-seconds", "26000"])
+    print("seed %s: this session took %.1f min" % (seed, (time.perf_counter() - t_seed) / 60))
+"""),
+        code("""
+import json, glob
+EPOCH28 = {0: (0.98074, 893.4), 1: (0.98065, 817.5)}
+print("%-6s%8s%10s%10s%10s%12s%8s" % ("seed", "epochs", "AUC", "rej@0.3", "AUC@28", "rej@28", "hours"))
+for f in sorted(glob.glob(OUT + "/*.json")):
+    r = json.load(open(f)); t = r["test_metrics"]
+    hours = r.get("walltime_sec", 0) / 3600   # cumulative across sessions
+    a28, j28 = EPOCH28[r["seed"]]
+    print("%-6d%8d%10.5f%10.1f%10.5f%12.1f%8.2f"
+          % (r["seed"], r["epochs_run"], t["test_auc"], t["bg_rej_30"], a28, j28, hours))
+    assert r["epochs_run"] == 30, "seed %d stopped at epoch %d" % (r["seed"], r["epochs_run"])
+"""),
+    ]
+    _finalise(cells, NB_DIR / "kaggle_message_k64_finish.ipynb")
+
+
 def main() -> int:
     blob = embed_code()
     print("embedded code: %.0f KB base64" % (len(blob) / 1024))
@@ -998,6 +1091,7 @@ def main() -> int:
     build_kappa(blob)
     build_message_probe(blob)
     build_message_sweep(blob)
+    build_message_finish(blob)
     for k in (32, 64):
         for seed in (0, 1):
             build_message(blob, seed=seed, k=k)

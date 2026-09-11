@@ -207,7 +207,8 @@ def train_classifier(
             epochs_no_improve += 1
 
         epochs_run = epoch
-        elapsed = prior_walltime + (time.perf_counter() - t0)
+        session = time.perf_counter() - t0
+        elapsed = prior_walltime + session
 
         if ckpt_file is not None and (epoch % cfg.ckpt_every == 0
                                       or epoch == cfg.epochs):
@@ -231,9 +232,16 @@ def train_classifier(
         if (cfg.early_stop_patience is not None
                 and epochs_no_improve >= cfg.early_stop_patience):
             break
-        if cfg.max_seconds is not None and elapsed > cfg.max_seconds:
-            print(f"[train] stopping at epoch {epoch}: {elapsed:.0f}s exceeds "
-                  f"max_seconds={cfg.max_seconds:.0f}. Rerun with --resume.")
+        # max_seconds caps this SESSION, not the whole run. The limit it
+        # guards against -- Kaggle's session cap -- resets with every session.
+        # Comparing the cumulative clock instead meant a run resumed after it
+        # had already passed the cap trained one epoch and stopped again,
+        # every session: two K=64 runs that stopped at 26026 s and 26068 s
+        # against a 26000 s cap would never have reached epoch 30.
+        if cfg.max_seconds is not None and session > cfg.max_seconds:
+            print(f"[train] stopping at epoch {epoch}: this session ran "
+                  f"{session:.0f}s, over max_seconds={cfg.max_seconds:.0f}. "
+                  f"Rerun with --resume.")
             stopped_early = True
             break
 

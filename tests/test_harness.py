@@ -222,3 +222,50 @@ def test_figure_scaling_runs(tmp_path) -> None:
     rc = fs.main(["--results-dir", str(root), "--out-dir", str(tmp_path / "fig")])
     assert rc == 0
     assert (tmp_path / "fig" / "scaling.csv").is_file()
+
+
+def test_max_seconds_caps_the_session_not_the_run(tmp_path) -> None:
+    """A run resumed after it passed max_seconds must still make progress.
+
+    max_seconds exists for Kaggle's per-session cap, so it has to be compared
+    with the time spent in THIS session. It was compared with the cumulative
+    clock restored from the checkpoint instead, and then a run already past
+    the cap trained one epoch per session and stopped again: the two K=64
+    message-passing runs that halted at 26026 s and 26068 s against a
+    26000 s cap could never have reached epoch 30.
+    """
+    import torch
+    import torch.nn as nn
+    from benchmarks.train import TrainConfig, train_classifier
+
+    class Tiny(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.net = nn.Sequential(nn.Linear(6, 8), nn.ReLU(), nn.Linear(8, 2))
+
+        def forward(self, x):
+            return self.net(x)
+
+        def regularization_loss(self):
+            return torch.zeros(())
+
+    torch.manual_seed(0)
+    X = torch.randn(256, 6)
+    y = (X[:, 0] > 0).long()
+    ckpt = tmp_path / "session.pt"
+
+    part = train_classifier(Tiny(), X, y, X, y, TrainConfig(
+        epochs=4, batch_size=64, ckpt_path=str(ckpt), max_seconds=0.0))
+    assert part.epochs_run == 1
+
+    state = torch.load(ckpt, weights_only=False)
+    state["walltime_sec"] = 1e6          # far past the cap, as after a long session
+    torch.save(state, ckpt)
+
+    resumed = train_classifier(Tiny(), X, y, X, y, TrainConfig(
+        epochs=4, batch_size=64, ckpt_path=str(ckpt), resume=True,
+        max_seconds=1e5))
+    assert resumed.epochs_run == 4, (
+        "resumed session stopped at epoch %d: max_seconds was compared with "
+        "the cumulative clock, not this session's" % resumed.epochs_run)
+    assert resumed.walltime_sec > 1e6    # the recorded clock still accumulates
