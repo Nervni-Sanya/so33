@@ -1,23 +1,31 @@
 % Bibliography for the SO(3,3) preprint.
 %
-% NOTE: arXiv IDs and venue years below are from memory; verify each entry
-% against the canonical source before arXiv submission. Fields most worth
-% double-checking are marked with `% verify:`.
+% Titles, author lists and arXiv ids were checked against each arXiv record
+% on 2026-09-11, and journal fields against Crossref where a DOI exists.
+% The arXiv id now lives in a real eprint field: BibTeX does not treat %
+% as a comment inside an entry, and the notes that used to sit there made
+% bibtex report 8 errors and exit non-zero.
 
 @inproceedings{bogatskiy2020lgn,
   title     = {Lorentz Group Equivariant Neural Network for Particle Physics},
   author    = {Bogatskiy, Alexander and Anderson, Brandon and Offermann, Jan T. and Roussi, Marwah and Miller, David W. and Kondor, Risi},
   booktitle = {International Conference on Machine Learning (ICML)},
   year      = {2020},
-  % verify: arXiv:2006.04780
+  eprint        = {2006.04780},
+  archivePrefix = {arXiv},
 }
 
 @article{gong2022lorentznet,
   title   = {An efficient Lorentz equivariant graph neural network for jet tagging},
   author  = {Gong, Shiqi and Meng, Qi and Zhang, Jue and Qu, Huilin and Li, Congqiao and Qian, Sitian and Du, Weitao and Ma, Zhi-Ming and Liu, Tie-Yan},
   journal = {Journal of High Energy Physics (JHEP)},
+  volume  = {2022},
+  number  = {7},
+  pages   = {030},
   year    = {2022},
-  % verify: arXiv:2201.08187
+  doi     = {10.1007/JHEP07(2022)030},
+  eprint        = {2201.08187},
+  archivePrefix = {arXiv},
 }
 
 @article{bogatskiy2022pelican,
@@ -25,7 +33,8 @@
   author  = {Bogatskiy, Alexander and Hoffman, Timothy and Miller, David W. and Offermann, Jan T.},
   journal = {arXiv preprint arXiv:2211.00454},
   year    = {2022},
-  % verify: arXiv:2211.00454
+  eprint        = {2211.00454},
+  archivePrefix = {arXiv},
 }
 
 @inproceedings{satorras2021egnn,
@@ -33,7 +42,8 @@
   author    = {Satorras, V{\'\i}ctor Garcia and Hoogeboom, Emiel and Welling, Max},
   booktitle = {International Conference on Machine Learning (ICML)},
   year      = {2021},
-  % verify: arXiv:2102.09844
+  eprint        = {2102.09844},
+  archivePrefix = {arXiv},
 }
 
 @inproceedings{cohen2016gconv,
@@ -41,7 +51,8 @@
   author    = {Cohen, Taco S. and Welling, Max},
   booktitle = {International Conference on Machine Learning (ICML)},
   year      = {2016},
-  % verify: arXiv:1602.07576
+  eprint        = {1602.07576},
+  archivePrefix = {arXiv},
 }
 
 @inproceedings{chen2018neuralode,
@@ -49,17 +60,21 @@
   author    = {Chen, Ricky T. Q. and Rubanova, Yulia and Bettencourt, Jesse and Duvenaud, David K.},
   booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
   year      = {2018},
-  % verify: arXiv:1806.07366
+  eprint        = {1806.07366},
+  archivePrefix = {arXiv},
 }
 
 @article{qu2020particlenet,
-  title   = {{ParticleNet}: Jet Tagging via Particle Clouds},
+  title   = {Jet Tagging via Particle Clouds},
   author  = {Qu, Huilin and Gouskos, Loukas},
   journal = {Physical Review D},
   volume  = {101},
+  number  = {5},
   pages   = {056019},
+  doi     = {10.1103/PhysRevD.101.056019},
   year    = {2020},
-  % verify: arXiv:1902.08570
+  eprint        = {1902.08570},
+  archivePrefix = {arXiv},
 }
 
 @inproceedings{finzi2021emlp,
@@ -67,5 +82,19 @@
   author    = {Finzi, Marc and Welling, Max and Wilson, Andrew Gordon},
   booktitle = {International Conference on Machine Learning (ICML)},
   year      = {2021},
-  % verify: arXiv:2104.09459
+  eprint        = {2104.09459},
+  archivePrefix = {arXiv},
+}
+
+@article{bogatskiy2024pelican,
+  title         = {Explainable Equivariant Neural Networks for Particle Physics: {PELICAN}},
+  author        = {Bogatskiy, Alexander and Hoffman, Timothy and Miller, David W. and Offermann, Jan T. and Liu, Xiaoyang},
+  journal       = {Journal of High Energy Physics (JHEP)},
+  volume        = {2024},
+  number        = {3},
+  pages         = {113},
+  year          = {2024},
+  doi           = {10.1007/JHEP03(2024)113},
+  eprint        = {2307.16506},
+  archivePrefix = {arXiv},
 }

@@ -77,11 +77,12 @@ test distribution of rapidities differs from training. Two standard
 responses address it. The first hand-crafts boost-invariant features
 (jet mass, transverse momentum) and feeds them to a generic
 classifier; the invariance is exact but the feature set is fixed in
-advance. The second builds Lorentz-equivariant architectures
-\citep{bogatskiy2020lgn, gong2022lorentznet, bogatskiy2022pelican} that
-propagate covariant quantities through the network and read out
-invariants at the end; here the equivariance is also exact, but it is
-imposed by fixing the group action analytically throughout the model.
+advance. The second builds Lorentz-equivariant architectures,
+which either propagate covariant quantities through the network and
+read out invariants at the end \citep{bogatskiy2020lgn, gong2022lorentznet}
+or operate on Lorentz invariants of the inputs from the first layer
+\citep{bogatskiy2022pelican, bogatskiy2024pelican}; here the equivariance
+is also exact, but it is imposed by fixing the group action analytically.
 
 Both responses share an assumption: the group action is specified, not
 learned. We ask a complementary question -- what happens if the
@@ -593,10 +594,16 @@ impoverished readout.
 \paragraph{Canonical-split evaluation.}
 Table~\ref{tab:topt-canonical} places our models on the canonical
 Kasieczka protocol next to published results for dedicated taggers.
-% NOTE: the published rows below are transcribed from memory of the
-% LorentzNet paper's comparison table -- VERIFY each against the
-% original papers (accuracy, AUC, and 1/eps_B at eps_S = 0.3) before
-% submission. Do not trust these values as-is.
+% Published rows verified against the source tables on 2026-09-11:
+%   LGN          arXiv:2006.04780, table 1
+%   ParticleNet  arXiv:1902.08570v3 (PRD 101, 056019), tables II and IV:
+%                366k parameters. The 498k often quoted belongs to an
+%                earlier ParticleNet in the Landscape comparison,
+%                arXiv:1902.09914 (0.938 / 0.985 / 1298 +- 46).
+%   LorentzNet   arXiv:2201.08187 (JHEP 07 (2022) 030), tables 1 and 5
+%   PELICAN      arXiv:2307.16506 (JHEP 03 (2024) 113), table 1. The 2022
+%                workshop paper arXiv:2211.00454 reports a different,
+%                45k-parameter model (0.9425 / 0.9869 / 2289 +- 204).
 Two observations, in honest order. First, the dedicated architectures
 are far ahead: LorentzNet and PELICAN reach $\mathrm{AUC} \approx
 0.987$ and background rejections in the thousands, versus our $0.948$
@@ -605,8 +612,8 @@ gap is a direct, same-protocol measurement, not an extrapolation.
 Second, within its own weight class the invariant readout is
 remarkably effective: a $4{,}802$-parameter MLP over seven pooled
 $\eta$-invariants of only the $32$ leading constituents -- no message
-passing, no attention, three to five orders of magnitude fewer
-parameters than the dedicated taggers -- reaches $\mathrm{AUC} =
+passing, no attention, roughly $45\times$ fewer parameters than
+LorentzNet or PELICAN -- reaches $\mathrm{AUC} =
 0.948$, identical across three seeds, and outperforms the
 non-invariant baseline trained under the identical protocol by
 $+0.193$ AUC and $6\times$ in background rejection. The comparison we
@@ -632,9 +639,9 @@ claim is the latter one; the former we simply report.
     \midrule
     \multicolumn{5}{l}{\textit{published (quoted for context)}} \\
     LGN~\citep{bogatskiy2020lgn}            & $\sim$4.5k  & $0.929$ & $0.964$  & $\sim$435 \\
-    ParticleNet~\citep{qu2020particlenet}   & $\sim$498k  & $0.940$ & $0.986$  & $\sim$1615 \\
-    LorentzNet~\citep{gong2022lorentznet}   & $\sim$220k  & $0.942$ & $0.987$  & $\sim$2195 \\
-    PELICAN~\citep{bogatskiy2022pelican}    & $\sim$208k  & $0.943$ & $0.987$  & $\sim$2250 \\
+    ParticleNet~\citep{qu2020particlenet}   & $\sim$366k  & $0.940$ & $0.986$  & $\sim$1615 \\
+    LorentzNet~\citep{gong2022lorentznet}   & $\sim$224k  & $0.942$ & $0.987$  & $\sim$2195 \\
+    PELICAN~\citep{bogatskiy2024pelican}    & $\sim$208k  & $0.943$ & $0.987$  & $\sim$2250 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -648,11 +655,14 @@ $\mathrm{SO}(1,3)$ equivariance for particle physics by acting with
 finite-dimensional group representations and is the closest conceptual
 precedent for our work. LorentzNet \citep{gong2022lorentznet} simplifies
 this to message passing on Minkowski four-momenta with invariant edge
-features and reaches accuracy competitive with the best non-equivariant
-top taggers; PELICAN \citep{bogatskiy2022pelican} adds permutation
-equivariance with Lorentz invariance or covariance and is strong across
-jet tagging and reconstruction. All three fix the group action
-analytically and propagate it through the network. We instead
+features and outperforms the non-equivariant top taggers it is compared
+against, ParticleNet included; PELICAN
+\citep{bogatskiy2022pelican, bogatskiy2024pelican} applies
+permutation-equivariant aggregation to the array of pairwise Minkowski
+dot products, in Lorentz-invariant and Lorentz-covariant variants, and
+performs strongly on top tagging and on $W$-boson momentum
+reconstruction. All three fix the group action analytically, and LGN and
+LorentzNet propagate it through the network. We instead
 parameterize a connection and integrate it as a geodesic flow, accepting
 approximate equivariance in exchange for a learnable inductive bias, and
 we work on the higher-rank split-signature algebra $\mathfrak{so}(3,3)$
@@ -665,8 +675,8 @@ leaderboard.
 The broader program of building symmetry into architectures rather than
 learning it from augmentation begins with group-equivariant
 convolutions \citep{cohen2016gconv} and includes $E(n)$-equivariant
-graph networks \citep{satorras2021egnn}, which classify from invariant
-inter-point distances. Our \texttt{eta\_invariants} architecture is in
+graph networks \citep{satorras2021egnn}, which build their edge messages
+from invariant inter-point distances. Our \texttt{eta\_invariants} architecture is in
 this family: it reads out $\eta$-invariants of a parameter-free lift,
 with the distinctive feature that the pairwise term it pools is the
 indefinite-metric inner product $\langle p_i, p_j\rangle_\eta$ rather
