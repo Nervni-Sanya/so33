@@ -211,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
                "signal_fraction", "value"], csv_rows)
     if fig is not None:
         save(fig, out_dir / f"binned_{args.experiment}.pdf")
+        save(fig, out_dir / f"binned_{args.experiment}.png")
     return 0
 
 

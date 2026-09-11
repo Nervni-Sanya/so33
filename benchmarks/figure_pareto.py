@@ -13,8 +13,18 @@ same caveat is flagged in paper/main.tex); the CSV carries a ``verified``
 column and the figure labels them explicitly so the distinction survives
 into the paper.
 
+The form is emphasis. Measured models wear categorical colours; everything
+published -- the stars and PELICAN's own size sweep -- is context in muted
+ink. A scatter can put any two marks side by side, so its colours must pass
+the palette validator on all pairs, which the reference palette allows for
+three series at most: the generic baselines are folded into one series
+(plotting.MODEL_STYLE) and the script refuses to colour a fourth. Published
+points are named in panel (b) only, where the log axis spreads them apart;
+in panel (a) they all share a band a few hundredths of AUC tall.
+
 Run:
-    python -m benchmarks.figure_pareto
+    python -m benchmarks.figure_pareto \
+        --results-dir results_matched_canonical,results_kappa/k64
     python -m benchmarks.figure_pareto --experiment top_tagging_constituents
 """
 
@@ -22,14 +32,26 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import pathlib
 import sys
 from collections import defaultdict
 
 from benchmarks.plotting import (
-    DEFAULT_OUT_DIR, FIGSIZE_WIDE, LITERATURE_STYLE,
-    get_pyplot, load_results, mean_std, save, style_for, write_csv,
+    DEFAULT_OUT_DIR, FIGSIZE_WIDE, INK_MUTED, INK_SECONDARY, LITERATURE_STYLE,
+    MAX_SCATTER_SERIES, get_pyplot, load_results, mean_std, save, style_for,
+    write_csv,
 )
+
+# Where a published point's name may go, tried in order: right, left, above,
+# below, then the diagonals. The outer rings sit further out and draw a
+# hairline leader back to their point. Offsets in points, with the anchor.
+_RING = ((5, 0, "left", "center"), (-5, 0, "right", "center"),
+         (0, 6, "center", "bottom"), (0, -6, "center", "top"),
+         (5, 5, "left", "bottom"), (-5, 5, "right", "bottom"),
+         (5, -5, "left", "top"), (-5, -5, "right", "top"))
+NAME_SLOTS = tuple((dx * reach, dy * reach, ha, va, reach > 1)
+                   for reach in (1, 3, 5) for dx, dy, ha, va in _RING)
 
 
 def _load_literature(path: pathlib.Path) -> list[dict]:
@@ -63,6 +85,79 @@ def _load_scaling(path: pathlib.Path) -> list[dict]:
         return sorted(csv.DictReader(fh), key=lambda r: float(r["n_params"]))
 
 
+def _name_points(fig, ax, names, markers) -> list[str]:
+    """Name points on ``ax`` so that every name is legible and unambiguous.
+
+    ``names`` holds (text, x, y, marker size in points) in data units;
+    ``markers`` holds (x, y, size in points) for every mark on the axes. Each
+    name takes the first slot in NAME_SLOTS whose box stays inside the axes
+    and clears every marker and every name already placed. A name beside its
+    point, without a leader, must also sit nearer its own mark than any other,
+    or it reads as naming the neighbour. A name with no such slot is left out
+    rather than drawn over another -- the CSV twin still carries it. Points
+    closer together than a marker radius share one joint name. Returns the
+    names left out.
+    """
+    from matplotlib.text import Text
+    from matplotlib.transforms import Bbox
+
+    fig.canvas.draw()                  # fix limits and layout before measuring
+    renderer = fig.canvas.get_renderer()
+    frame = ax.get_window_extent(renderer)
+    centres, taken = [], []
+    for x, y, size in markers:
+        px, py = ax.transData.transform((x, y))
+        r = size * fig.dpi / 72.0 / 2.0
+        centres.append((px, py))
+        taken.append(Bbox.from_extents(px - r, py - r, px + r, py + r))
+
+    def gap(box, px, py):
+        return math.hypot(max(box.x0 - px, 0.0, px - box.x1),
+                          max(box.y0 - py, 0.0, py - box.y1))
+
+    # LorentzNet and PELICAN overlap in panel (b). Two names would compete for
+    # the same few slots and neither could say which star is which, so points
+    # that share a spot are named once, together.
+    spots: list[list] = []
+    for text, x, y, size in names:
+        px, py = ax.transData.transform((x, y))
+        radius = size * fig.dpi / 72.0 / 2.0
+        for spot in spots:
+            if math.hypot(px - spot[3], py - spot[4]) <= radius:
+                spot[0].append(text)
+                break
+        else:
+            spots.append([[text], x, y, px, py, radius])
+
+    left_out = []
+    for texts, x, y, ox, oy, same_spot in spots:
+        text = " / ".join(texts)
+        for dx, dy, ha, va, leader in NAME_SLOTS:
+            t = ax.annotate(
+                text, (x, y), textcoords="offset points", xytext=(dx, dy),
+                ha=ha, va=va, fontsize=6, color=INK_SECONDARY,
+                arrowprops=dict(arrowstyle="-", color=INK_MUTED, linewidth=0.5,
+                                shrinkA=0, shrinkB=5) if leader else None)
+            t.set_in_layout(False)
+            # The text alone: an annotation's own extent includes its leader.
+            t.update_positions(renderer)
+            box = Text.get_window_extent(t, renderer).padded(1.0)
+            clear = (frame.x0 <= box.x0 and box.x1 <= frame.x1
+                     and frame.y0 <= box.y0 and box.y1 <= frame.y1
+                     and not any(box.overlaps(o) for o in taken))
+            if clear and not leader:
+                own = gap(box, ox, oy)
+                clear = all(gap(box, px, py) >= own for px, py in centres
+                            if math.hypot(px - ox, py - oy) > same_spot)
+            if clear:
+                taken.append(box)
+                break
+            t.remove()
+        else:
+            left_out.append(text)
+    return left_out
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--results-dir", type=str, default="results",
@@ -78,11 +173,12 @@ def main(argv: list[str] | None = None) -> int:
                    help="A published model's own parameter sweep, drawn as a "
                         "curve. Empty string to omit it.")
     p.add_argument("--include", type=str,
-                   default="so3c_equivariant_set,so3c_invariant_set,"
-                           "eta_invariants,relu_mlp",
+                   default="so3c_covariant_set,eta_invariants,relu_mlp,gelu_mlp",
                    help="Comma-separated models to plot, in the paper's "
                         "curated order. Empty string plots everything found "
-                        "(useful for exploration, too cluttered for print).")
+                        "(useful for exploration, too cluttered for print). "
+                        f"Either way at most {MAX_SCATTER_SERIES} colours are "
+                        "drawn.")
     p.add_argument("--exclude", type=str, default="relu_bottleneck",
                    help="Comma-separated models to keep out of the plot (they "
                         "stay in the CSV). The non-equivariant baseline sits at "
@@ -157,6 +253,17 @@ def main(argv: list[str] | None = None) -> int:
                          if r["model"].startswith(("so3c", "eta"))
                          or abs(r["n_params"] - matched) / matched < 0.25]
 
+    # Folded models share a colour, so count colours, not models. Past the
+    # all-pairs cap two of them could not be told apart, and no choice of
+    # colours fixes that -- stop rather than draw it.
+    colours = {style_for(r["model"])["color"]: style_for(r["model"])["label"]
+               for r in plot_rows}
+    if len(colours) > MAX_SCATTER_SERIES:
+        print(f"[pareto] {len(colours)} coloured series "
+              f"({'; '.join(colours.values())}), but a scatter carries at most "
+              f"{MAX_SCATTER_SERIES}. Narrow --include, or facet.", file=sys.stderr)
+        return 2
+
     fig, (ax_auc, ax_rej) = plt.subplots(1, 2, figsize=FIGSIZE_WIDE)
 
     for ax, key, std_key, ylabel in (
@@ -172,28 +279,38 @@ def main(argv: list[str] | None = None) -> int:
             ax.errorbar(r["n_params"], r[key], yerr=r[std_key] or None,
                         color=stl["color"], marker=stl["marker"], markersize=6,
                         capsize=2, linestyle="none", label=legend_label, zorder=3)
-        offsets = [(5, 4), (5, -9), (-6, 6), (-6, -11)]
         if scaling:
             ax.plot([float(r["n_params"]) for r in scaling],
                     [float(r["auc"] if key == "auc" else r["bg_rej_30"])
                      for r in scaling],
-                    color="#999999", linewidth=1.0, marker=".", markersize=4,
+                    color=INK_MUTED, linewidth=1.0, marker=".", markersize=4,
                     linestyle="--", zorder=1,
                     label="PELICAN, its own size sweep")
-        for i, l in enumerate(lit):
+        for l in lit:
             val = float(l["auc"] if key == "auc" else l["bg_rej_30"])
             ax.plot(float(l["n_params"]), val, markerfacecolor="none",
                     markersize=9, zorder=2, **LITERATURE_STYLE)
-            dx, dy = offsets[i % len(offsets)]
-            ax.annotate(l["model"], (float(l["n_params"]), val),
-                        textcoords="offset points", xytext=(dx, dy),
-                        ha="left" if dx > 0 else "right",
-                        fontsize=6, color="#666666")
         ax.set_xscale("log")
         ax.set_xlabel("trainable parameters")
         ax.set_ylabel(ylabel)
-        ax.set_xlim(2e3, 2e6)
     ax_rej.set_yscale("log")
+    ax_auc.set_title("(a)", loc="left", fontsize=8, color=INK_SECONDARY)
+    ax_rej.set_title("(b)", loc="left", fontsize=8, color=INK_SECONDARY)
+    # Every point on the axis. A fixed 2e3-2e6 range clipped both ends: the
+    # small half of PELICAN's sweep (248-1000 parameters), EFP at 1k, and
+    # ParT at 2.1M.
+    xs = ([r["n_params"] for r in plot_rows] + [float(l["n_params"]) for l in lit]
+          + [float(r["n_params"]) for r in scaling])
+    if xs:
+        for ax in (ax_auc, ax_rej):
+            ax.set_xlim(min(xs) / 1.6, max(xs) * 1.6)
+    # Headroom above the best rejection, so the names at the top of panel (b)
+    # have somewhere to go other than on top of each other.
+    rejs = ([float(l["bg_rej_30"]) for l in lit]
+            + [float(r["bg_rej_30"]) for r in scaling]
+            + [r["rej"] for r in plot_rows if math.isfinite(r["rej"])])
+    if rejs:
+        ax_rej.set_ylim(top=max(rejs) * 2.0)
     # Focus the AUC axis on the band where every equivariant model lives.
     finite = [r["auc"] for r in plot_rows] + [float(l["auc"]) for l in lit]
     lo = min(finite)
@@ -205,11 +322,23 @@ def main(argv: list[str] | None = None) -> int:
         seen.setdefault(lb, h)
     star = plt.Line2D([], [], markerfacecolor="none", markersize=9,
                       color=LITERATURE_STYLE["color"], marker="*", linestyle="none")
-    seen["published (verified against the source table)"] = star
+    seen["published, verified against the source table (named in b)"] = star
     fig.legend(seen.values(), seen.keys(), loc="lower center",
                ncol=2, frameon=False, bbox_to_anchor=(0.5, -0.16))
 
+    fig.tight_layout()
+    markers = ([(float(l["n_params"]), float(l["bg_rej_30"]), 9) for l in lit]
+               + [(float(r["n_params"]), float(r["bg_rej_30"]), 4) for r in scaling]
+               + [(r["n_params"], r["rej"], 6) for r in plot_rows])
+    names = sorted(((l["model"], float(l["n_params"]), float(l["bg_rej_30"]), 9)
+                    for l in lit), key=lambda n: -n[2])
+    left_out = _name_points(fig, ax_rej, names, markers)
+    if left_out:
+        print(f"[pareto] no free spot to name {', '.join(left_out)} in panel (b); "
+              f"they stay in the CSV.", file=sys.stderr)
+
     save(fig, out_dir / "pareto_params_vs_performance.pdf")
+    save(fig, out_dir / "pareto_params_vs_performance.png")
     return 0
 
 

@@ -84,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         fig.legend(handles, labels, loc="lower center", ncol=3, frameon=False,
                    bbox_to_anchor=(0.5, -0.12))
         save(fig, pathlib.Path(args.out_dir) / "k_robustness.pdf")
+        save(fig, pathlib.Path(args.out_dir) / "k_robustness.png")
     return 0
 
 

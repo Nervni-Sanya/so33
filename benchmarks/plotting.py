@@ -23,38 +23,80 @@ DEFAULT_OUT_DIR = pathlib.Path("paper/figures")
 FIGSIZE = (4.6, 3.2)
 FIGSIZE_WIDE = (7.2, 3.2)
 
+# Chart ink from the reference palette (dataviz skill, references/palette.md).
+# Labels and annotations wear these, never a series colour.
+INK_SECONDARY = "#52514e"
+INK_MUTED = "#898781"
+
+# A scatter can put any two marks side by side, and the reference palette
+# passes all pairs for three colours at most; a figure that would colour more
+# has to fold or facet instead.
+MAX_SCATTER_SERIES = 3
+
 # One colour/marker per model, shared across every figure so a reader can
 # track a model between plots. Distinct markers keep the figures legible in
-# black and white.
+# black and white, and are the secondary encoding the palette rules require.
 #
-# The so3c set models take slots 1-5 of the validated reference categorical
-# palette (dataviz skill, references/palette.md) in its fixed order, so the
-# assignment never skips a slot:
-#   validate_palette.py "#2a78d6,#eb6834,#1baf7a,#eda100" --mode light
-#       --surface "#ffffff"   -> PASS, worst adjacent CVD dE 9.1, normal 22.9
-#   the three exactly equivariant models alone, --pairs all -> PASS
-# Aqua and yellow sit below 3:1 on white, which obliges a relief channel:
-# every figure writes a CSV twin (the table view) and keeps a legend with
-# markers. The previous so3c colours, #1a1a1a and #c1121f, failed the
-# lightness-band and chroma checks -- near-black reads as grey, not as a
-# series -- and so3c_interaction_set moves off #e07a00, which would have sat
-# beside the new orange. eta_invariants and relu_bottleneck belong to the
-# SO(3,3) figures and have NOT been re-validated.
+# Every colour is a light-mode slot of the reference categorical palette. Its
+# slot order only guarantees neighbours when a figure uses slots 1..N; these
+# colours follow the model, so a figure that draws a subset skips slots and
+# puts side by side colours the order kept apart. Each figure's co-occurring
+# set is therefore validated on its own -- all pairs for the scatter, and all
+# pairs for the three-line figures too, which then holds however their lines
+# cross. validate_palette.py, all with --mode light --surface "#ffffff" (the
+# figures are print PDFs on white); dE is OKLab x100, CVD the worse of
+# protan/deutan:
+#
+#   "#2a78d6,#008300,#1baf7a,#eda100"      boost_robustness (a), drawn order
+#       -> PASS, worst adjacent CVD 9.1, normal 15.6
+#   "#2a78d6,#1baf7a,#eda100" --pairs all  boost_robustness (b), exact models
+#       -> PASS, CVD 9.1, normal 22.9
+#   "#008300,#eda100,#4a3aa7" --pairs all  convergence, binned x2, k_robustness
+#       -> PASS, CVD 16.2, normal 30.3
+#   "#1baf7a,#eb6834" --pairs all          pareto (scatter)
+#       -> PASS, CVD 9.2, normal 27.6
+#   "#1baf7a,#4a3aa7,#eb6834" --pairs all  pareto with eta included
+#       -> PASS, CVD 9.2, normal 27.6
+#   "#4a3aa7,#e34948" --pairs all          the two SO(3,3) baselines
+#       -> PASS, CVD 22.7, normal 33.6
+#
+# so3c_equivariant_set left orange #eb6834 on 2026-09-11: four figures draw it
+# beside so3c_invariant_set with no so3c_covariant_set between them, and
+# "#eb6834,#eda100" measures normal dE 13.7, under the floor of 15, whatever
+# colour eta takes. Of the single changes, green is the only one that passes
+# every set above without a CVD warning and also lets eta share a figure with
+# either generic baseline.
+# Pairs that FAIL, so these models must never share a figure: the generic
+# MLP with so3c_invariant_set (normal 13.7), so3c_interaction_set (12.9),
+# so3c_equivariant_set (CVD 3.2) or relu_bottleneck (normal 7.1), and
+# so3c_interaction_set with relu_bottleneck (normal 13.2). Aqua, yellow and
+# magenta sit below 3:1 on white, which obliges a relief channel: every
+# figure writes a CSV twin (the table view) and keeps a legend with markers.
+_GENERIC_SET_MLP = dict(color="#eb6834", marker="h",
+                        label="generic Deep Sets MLP (ReLU, GELU)")
 MODEL_STYLE: dict[str, dict[str, Any]] = {
     "so3c_message_set":      dict(color="#2a78d6", marker="o", label="SO3C message passing"),
-    "so3c_equivariant_set":  dict(color="#eb6834", marker="X", label="SO3C flow, invariant connection"),
+    "so3c_equivariant_set":  dict(color="#008300", marker="X", label="SO3C flow, invariant connection"),
     "so3c_covariant_set":    dict(color="#1baf7a", marker="P", label="SO3C flow, covariant connection"),
     "so3c_invariant_set":    dict(color="#eda100", marker="s", label="SO3C invariant (no flow)"),
     "so3c_interaction_set":  dict(color="#e87ba4", marker="D", label="SO3C interaction"),
-    "eta_invariants":        dict(color="#0353a4", marker="^", label=r"$\eta$-invariants (SO(3,3))"),
-    "relu_bottleneck":       dict(color="#6c757d", marker="v", label="ReLU bottleneck"),
+    "eta_invariants":        dict(color="#4a3aa7", marker="^", label=r"$\eta$-invariants (SO(3,3))"),
+    # Folded into one series: the parameter-matched generic baselines are one
+    # comparison (same capacity, no geometry) and land on one point on the
+    # canonical protocol -- 9053 parameters, AUC 0.7636 / 0.7633, rejection
+    # 8.5 / 8.6. The CSV twins keep them apart.
+    "relu_mlp":              _GENERIC_SET_MLP,
+    "gelu_mlp":              _GENERIC_SET_MLP,
+    "relu_bottleneck":       dict(color="#e34948", marker="v", label="ReLU bottleneck"),
 }
-LITERATURE_STYLE = dict(color="#888888", marker="*", linestyle="none")
+LITERATURE_STYLE = dict(color=INK_MUTED, marker="*", linestyle="none")
 
 
 def style_for(model: str) -> dict[str, Any]:
+    # A model without an entry is context, drawn in muted ink rather than
+    # given a colour that nothing has validated.
     return MODEL_STYLE.get(
-        model, dict(color="#444444", marker="x", label=model)
+        model, dict(color=INK_MUTED, marker="x", label=model)
     )
 
 

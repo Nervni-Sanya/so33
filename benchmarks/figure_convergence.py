@@ -78,6 +78,7 @@ def main(argv: list[str] | None = None) -> int:
                        "train_loss": "training loss"}[args.metric])
         ax.legend(frameon=False, loc="lower right")
         save(fig, pathlib.Path(args.out_dir) / f"convergence_{args.metric}.pdf")
+        save(fig, pathlib.Path(args.out_dir) / f"convergence_{args.metric}.png")
     return 0
 
 
