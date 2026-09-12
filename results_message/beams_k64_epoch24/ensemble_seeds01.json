@@ -1,0 +1,25 @@
+{
+  "results_dir": "results_message\\beams_k64_epoch24",
+  "model": "so3c_message_set",
+  "experiment": "top_tagging_canonical",
+  "members": [
+    {
+      "seed": 0,
+      "auc": 0.9830347794462609,
+      "bg_rej_30": 1109.4175824175825,
+      "bg_rej_50": 282.0027932960894
+    },
+    {
+      "seed": 1,
+      "auc": 0.9831801206768986,
+      "bg_rej_30": 1079.7540106951872,
+      "bg_rej_50": 292.6289855072464
+    }
+  ],
+  "ensemble": {
+    "auc": 0.9835548848488367,
+    "bg_rej_30": 1140.7570621468926,
+    "bg_rej_50": 299.57566765578633
+  },
+  "mean_score_correlation": 0.9934737807040207
+}
