@@ -1110,6 +1110,103 @@ if best:
     _finalise(cells, NB_DIR / "kaggle_beams_tuning.ipynb")
 
 
+def build_beams_k64(blob: str, seed: int = 0) -> None:
+    """The headline run: beams and channels 8 at K=64, canonical protocol.
+
+    Everything measured on the cheap protocol points here. Beams took K=32
+    from 0.9786 / 585 to 0.98088 / 767.7, and with beams feeding lab-frame
+    information the capacity that had saturated pays again: channels 8 gives
+    0.98128 / 834.4. Longer training, a larger or smaller learning rate and
+    even mild regularisation all lost, so the recipe stays as it is --
+    Adam at 3e-3, cosine, no dropout, no weight decay.
+
+    Cost. The beamless channels-4 model took 7.75 h per seed for 30 epochs at
+    K=64. Beams cost about 8% and channels 8 about 27%, so expect ~10.6 h --
+    more than a comfortable Kaggle session. --max-seconds 30000 stops it
+    cleanly with a checkpoint, and train.py now caps per session, so the
+    finish kernel pattern resumes it to epoch 30 (that bug would have made a
+    resumed run advance one epoch per session).
+
+    Two seeds fit a weekly quota at this price; a third and the ensemble wait
+    for the next one.
+    """
+    cells = [
+        md("""
+# Beams + channels 8, K=64, canonical protocol
+
+The configuration every probe pointed at. References on the same canonical
+protocol: the beamless message model scored 0.98073 +- 0.00006 AUC and 850
++- 56 rejection over two seeds at K=64, and `so3c_covariant_set` 0.9772 /
+638. PELICAN is 0.9870 / 2250 at 208k parameters.
+"""),
+        code("""
+import subprocess
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader"], capture_output=True,
+                     text=True).stdout.strip())
+"""),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code(GPU_SETUP),
+        code("""
+import glob, pathlib
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+assert cands, "attach the K=128 data-prep kernel output"
+DATA = str(pathlib.Path(cands[0]).parent)
+OUT = "/kaggle/working/results_beams_k64"
+CKPT = "/kaggle/working/checkpoints"
+print("data:", DATA)
+"""),
+        code("""
+# Smoke: one epoch on 20k jets with the real configuration. It must write a
+# result before the session commits ten hours.
+import glob
+run(["benchmarks.run_top_tagging",
+     "--cache-dir", DATA, "--representation", "constituents",
+     "--canonical-splits", "--epochs", "1", "--normalize", "global",
+     "--max-train-samples", "20000",
+     "--seed", "0", "--device", "cuda", "--dtype", "float32",
+     "--batch-size", "256", "--n-constituents", "64",
+     "--rounds", "3", "--beams", "--channels", "8",
+     "--eval-chunk-size", "1024",
+     "--models", "so3c_message_set",
+     "--results-dir", "/kaggle/working/smoke"])
+assert glob.glob("/kaggle/working/smoke/*.json"), "smoke run wrote no result"
+"""),
+        code("""
+run(["benchmarks.run_top_tagging",
+     "--cache-dir", DATA, "--representation", "constituents",
+     "--canonical-splits", "--epochs", "30", "--normalize", "global",
+     "--seed", "%d", "--device", "cuda", "--dtype", "float32",
+     "--batch-size", "256", "--n-constituents", "64",
+     "--rounds", "3", "--beams", "--channels", "8",
+     "--eval-chunk-size", "1024",
+     "--models", "so3c_message_set",
+     "--results-dir", OUT, "--ckpt-dir", CKPT,
+     "--resume", "--max-seconds", "30000"])
+""" % seed),
+        code("""
+import json, glob
+print("%-34s%9s%8s%9s%10s%10s%8s"
+      % ("model", "params", "epochs", "AUC", "rej@0.3", "rej@0.5", "hours"))
+print("%-34s%9d%8d%9.5f%10.1f%10s%8.2f"
+      % ("covariant K=64 (reference)", 9078, 30, 0.9772, 638.0, "-", 1.66))
+print("%-34s%9d%8d%9.5f%10.1f%10.1f%8.2f"
+      % ("message K=64, no beams (ref)", 13862, 30, 0.98073, 850.0, 233.0, 7.75))
+for f in sorted(glob.glob(OUT + "/*.json")):
+    r = json.load(open(f)); t = r["test_metrics"]
+    print("%-34s%9d%8d%9.5f%10.1f%10.1f%8.2f"
+          % ("beams + channels 8, seed %d" % r["seed"], r["n_params"],
+             r["epochs_run"], t["test_auc"], t["bg_rej_30"],
+             t.get("bg_rej_50", float("nan")), r["walltime_sec"] / 3600))
+    if r["epochs_run"] < 30:
+        print("  stopped at epoch %d on the time cap: resume with the finish "
+              "kernel pattern before reporting" % r["epochs_run"])
+"""),
+    ]
+    _finalise(cells, NB_DIR / ("kaggle_beams_k64_seed%d.ipynb" % seed))
+
+
 def build_message(blob: str, seed: int = 0, k: int = 64) -> None:
     """Tier-2 item 5: covariant message passing on the canonical protocol.
 
@@ -1340,6 +1437,8 @@ def main() -> int:
     build_message_finish(blob)
     build_beams_probe(blob)
     build_beams_tuning(blob)
+    for seed in (0, 1):
+        build_beams_k64(blob, seed=seed)
     for k in (32, 64):
         for seed in (0, 1):
             build_message(blob, seed=seed, k=k)

@@ -1,0 +1,15 @@
+{
+  "id": "nsanya/so3c-beams-k64-seed0",
+  "title": "SO3C beams K64 seed0",
+  "code_file": "kaggle_beams_k64_seed0.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [
+    "nsanya/so3c-data-prep-k-128"
+  ]
+}
