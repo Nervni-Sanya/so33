@@ -58,10 +58,13 @@ XLABEL = r"boost scale $s$ (rapidity components $\sim\mathcal{N}(0, s)$)"
 
 def _curves(records: list[dict]) -> dict[str, dict]:
     """model -> per-scale mean, spread and provenance."""
+    # Keyed by model AND tag: a beams variant carries the same model name as
+    # the beamless one, and merging them would average two different models
+    # as though they were seeds of one.
     by_model: dict[str, list[dict]] = defaultdict(list)
     for r in records:
         if "curve" in r:
-            by_model[r["model"]].append(r)
+            by_model[r["model"] + str(r.get("tag") or "")].append(r)
 
     out: dict[str, dict] = {}
     for model, recs in by_model.items():
@@ -79,6 +82,8 @@ def _curves(records: list[dict]) -> dict[str, dict]:
         out[model] = dict(
             cells=cells,
             n_params=recs[0].get("n_params"),
+            base=recs[0]["model"],
+            tag=str(recs[0].get("tag") or ""),
             dtypes=sorted({str(r.get("dtype", "not recorded")) for r in recs}),
         )
     return out
@@ -119,8 +124,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[boost_robustness] no boost records under {args.results_dir}",
               file=sys.stderr)
         return 1
-    models = [m for m in ORDER if m in curves] + sorted(
-        m for m in curves if m not in ORDER)
+    def rank(key):
+        base = curves[key]["base"]
+        return (ORDER.index(base) if base in ORDER else len(ORDER), key)
+
+    models = sorted(curves, key=rank)
 
     rows = []
     for m in models:
@@ -153,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     # The exact models sit within 0.015 of one another in (a) and on top of
     # one another at zero in (b); a small horizontal dodge keeps each
     # marker visible in both panels.
-    exact = [m for m in models if m != BROKEN]
+    exact = [m for m in models if curves[m]["base"] != BROKEN]
     dodge = {m: (i - (len(exact) - 1) / 2) * 0.06 for i, m in enumerate(exact)}
 
     # (a) every model, full AUC range.
@@ -164,9 +172,9 @@ def main(argv: list[str] | None = None) -> int:
         ys = [c["cells"][x]["auc"] for x in xs]
         es = [c["cells"][x]["std"] for x in xs]
         lo = min(lo, min(y - e for y, e in zip(ys, es)))
-        _mark(ax_a, [x + dodge.get(m, 0.0) for x in xs], ys, es, m,
-              style_for(m)["label"])
-        if m == BROKEN:
+        label = style_for(c["base"])["label"] + (" + beams" if c["tag"] else "")
+        _mark(ax_a, [x + dodge.get(m, 0.0) for x in xs], ys, es, c["base"], label)
+        if curves[m]["base"] == BROKEN:
             # Label the one series the panel is about, at its endpoint, in ink.
             ax_a.annotate(f"{ys[-1]:.2f}", (xs[-1], ys[-1]),
                           textcoords="offset points", xytext=(7, 0),
@@ -192,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
         ds = [c["cells"][x]["auc"] - base for x in xs]
         es = [c["cells"][x]["std"] for x in xs]
         lim = max(lim, max(abs(d) + e for d, e in zip(ds, es)))
-        _mark(ax_b, [x + dodge[m] for x in xs], ds, es, m, None)
+        _mark(ax_b, [x + dodge[m] for x in xs], ds, es, c["base"], None)
     ax_b.axhline(0.0, color=BASELINE, linewidth=0.8, zorder=1)
     lim = max(1.6 * lim, 1e-4)
     ax_b.set_ylim(-lim, lim)

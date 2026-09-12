@@ -25,6 +25,17 @@ Each rapidity averages over several random group elements, since a single
 draw picks one direction and the answer depends on where it points
 relative to the jet axis.
 
+Beams. A model built with beams (LorentzNet and PELICAN both add two beam
+particles along the collider axis) is NOT invariant under a Lorentz
+transformation that leaves those beams where they are: the beams define the
+lab orientation, and moving the jet past them is a physically different
+event. Invariance holds when the jet and the beams transform together, and
+under rotations about the beam axis. PELICAN says the same of its own
+construction (arXiv:2307.16506 p.9). So for a beams model this script
+measures two curves at each scale -- beams fixed, and beams transformed
+with the jet -- and the second is the one that tests the architecture.
+Reporting only the first would read as a broken symmetry.
+
 Precision. This diagnostic defaults to float64 and should stay there. The
 bivector lift is quadratic in the momenta, so a rapidity-2 boost inflates
 the input range by ~e^2 = 7.4 and the lifted range by ~55; in float32 that
@@ -94,6 +105,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--rounds", type=int, default=None)
     p.add_argument("--neighbors", type=int, default=None)
     p.add_argument("--channels", type=int, default=None)
+    p.add_argument("--beams", action="store_true",
+                   help="Build the so3c models with beam particles. Adds a "
+                        "second curve per scale with the beams transformed "
+                        "alongside the jet.")
+    p.add_argument("--tag", type=str, default="",
+                   help="Suffix for the result filenames. Variants of one "
+                        "model (with and without beams, say) share a model "
+                        "name, so without a tag the second run silently "
+                        "overwrites the first.")
     p.add_argument("--results-dir", type=str, default="results_boost")
     args = p.parse_args(argv)
 
@@ -101,7 +121,8 @@ def main(argv: list[str] | None = None) -> int:
     rapidities = [float(r) for r in args.rapidities.split(",")]
     so3c_kwargs = {k: v for k, v in (("rounds", args.rounds),
                                      ("neighbors", args.neighbors),
-                                     ("channels", args.channels))
+                                     ("channels", args.channels),
+                                     ("beams", True if args.beams else None))
                    if v is not None} or None
 
     split = load_top_tagging_constituents(
@@ -132,33 +153,59 @@ def main(argv: list[str] | None = None) -> int:
 
         X = split.X_test.to(args.device)
         y = split.y_test.to(args.device)
+        has_beams = hasattr(model, "beam_p4")
+        beams0 = model.beam_p4.clone() if has_beams else None
         curve = []
         for rap in rapidities:
             gen = torch.Generator().manual_seed(1000 + int(rap * 100))
             if rap == 0.0:
                 aucs = [_auc(model, X, y, args.eval_chunk_size)]
+                moved = list(aucs)
             else:
-                aucs = []
+                aucs, moved = [], []
                 for _ in range(args.draws):
                     L, _z = random_lorentz_pair(rot_scale=1.0, boost_scale=rap,
                                                 generator=gen)
-                    aucs.append(_auc(model, boost_jets(X, L.to(args.device)),
-                                     y, args.eval_chunk_size))
+                    Xb = boost_jets(X, L.to(args.device))
+                    aucs.append(_auc(model, Xb, y, args.eval_chunk_size))
+                    if has_beams:
+                        # The beams are part of the event, so a transformation
+                        # of the event moves them too. This is the curve that
+                        # tests the architecture.
+                        with torch.no_grad():
+                            model.beam_p4.copy_(
+                                (beams0.to(L.dtype) @ L.T).to(beams0.dtype))
+                        moved.append(_auc(model, Xb, y, args.eval_chunk_size))
+                        with torch.no_grad():
+                            model.beam_p4.copy_(beams0)
             t = torch.tensor(aucs)
-            curve.append({"rapidity": rap, "auc": t.mean().item(),
-                          "auc_std": t.std().item() if len(aucs) > 1 else 0.0,
-                          "draws": len(aucs)})
-            print(f"  {name:<22} rapidity {rap:<4} AUC {t.mean():.4f}"
-                  f" +- {t.std() if len(aucs) > 1 else 0.0:.4f}")
+            cell = {"rapidity": rap, "auc": t.mean().item(),
+                    "auc_std": t.std().item() if len(aucs) > 1 else 0.0,
+                    "draws": len(aucs)}
+            line = (f"  {name:<22} rapidity {rap:<4} AUC {t.mean():.4f}"
+                    f" +- {t.std() if len(aucs) > 1 else 0.0:.4f}")
+            if has_beams and moved:
+                tm = torch.tensor(moved)
+                cell["auc_beams_moved"] = tm.mean().item()
+                cell["auc_beams_moved_std"] = (tm.std().item()
+                                               if len(moved) > 1 else 0.0)
+                line += f"   beams moved {tm.mean():.4f}"
+            curve.append(cell)
+            print(line)
 
         drop = curve[0]["auc"] - curve[-1]["auc"]
         print(f"  {name:<22} drop over the range: {drop:+.4f}")
+        if has_beams:
+            drop_moved = (curve[0]["auc_beams_moved"]
+                          - curve[-1]["auc_beams_moved"])
+            print(f"  {name:<22} drop with the beams moved: {drop_moved:+.4f}")
         record = {"model": name, "n_params": n_params, "seed": args.seed,
-                  "dtype": args.dtype,
+                  "dtype": args.dtype, "beams": has_beams, "tag": args.tag,
+                  "drop_beams_moved": (drop_moved if has_beams else None),
                   "n_jets": args.n, "epochs": args.epochs,
                   "n_constituents": args.n_constituents,
                   "so3c_kwargs": so3c_kwargs, "curve": curve, "drop": drop}
-        (out_dir / f"boost__{name}__seed{args.seed}.json").write_text(
+        (out_dir / f"boost__{name}{args.tag}__seed{args.seed}.json").write_text(
             json.dumps(record, indent=2))
         rows.append(record)
 
