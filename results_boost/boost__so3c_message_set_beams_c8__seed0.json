@@ -1,0 +1,67 @@
+{
+  "model": "so3c_message_set",
+  "n_params": 22834,
+  "seed": 0,
+  "dtype": "float64",
+  "beams": true,
+  "tag": "_beams_c8",
+  "drop_beams_moved": -5.328655242919922e-05,
+  "n_jets": 20000,
+  "epochs": 8,
+  "n_constituents": 32,
+  "so3c_kwargs": {
+    "channels": 8,
+    "beams": true
+  },
+  "curve": [
+    {
+      "rapidity": 0.0,
+      "auc": 0.968427300453186,
+      "auc_std": 0.0,
+      "draws": 1,
+      "auc_beams_moved": 0.968427300453186,
+      "auc_beams_moved_std": 0.0
+    },
+    {
+      "rapidity": 0.5,
+      "auc": 0.962022066116333,
+      "auc_std": 0.00432054977864027,
+      "draws": 4,
+      "auc_beams_moved": 0.9684274196624756,
+      "auc_beams_moved_std": 2.384185791015625e-07
+    },
+    {
+      "rapidity": 1.0,
+      "auc": 0.9522141814231873,
+      "auc_std": 0.006753577385097742,
+      "draws": 4,
+      "auc_beams_moved": 0.9684275388717651,
+      "auc_beams_moved_std": 2.7530205670700525e-07
+    },
+    {
+      "rapidity": 1.5,
+      "auc": 0.942470133304596,
+      "auc_std": 0.009730097837746143,
+      "draws": 4,
+      "auc_beams_moved": 0.9684265851974487,
+      "auc_beams_moved_std": 1.5837347291380865e-06
+    },
+    {
+      "rapidity": 2.0,
+      "auc": 0.931589663028717,
+      "auc_std": 0.00621480168774724,
+      "draws": 4,
+      "auc_beams_moved": 0.9684327840805054,
+      "auc_beams_moved_std": 1.0379711056884844e-05
+    },
+    {
+      "rapidity": 3.0,
+      "auc": 0.9331750273704529,
+      "auc_std": 0.015073904767632484,
+      "draws": 4,
+      "auc_beams_moved": 0.9684805870056152,
+      "auc_beams_moved_std": 9.041314478963614e-05
+    }
+  ],
+  "drop": 0.035252273082733154
+}
