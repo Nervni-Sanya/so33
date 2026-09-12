@@ -1207,6 +1207,108 @@ for f in sorted(glob.glob(OUT + "/*.json")):
     _finalise(cells, NB_DIR / ("kaggle_beams_k64_seed%d.ipynb" % seed))
 
 
+def build_beams_k64_finish(blob: str) -> None:
+    """Finish both headline runs, which stopped on the session cap.
+
+    beams + channels 8 costs 1272 s per epoch at K=64, so 30 epochs is 10.6 h
+    and both seeds stopped at epoch 24 against --max-seconds 30000. Six
+    epochs each remain, about 2.1 h per seed.
+
+    Kaggle hands a new session an empty /kaggle/working, so --resume alone
+    would start from epoch 1. This kernel mounts both runs, copies each
+    checkpoint to the path the runner derives, and resumes with exactly the
+    flags the runs used (--beams --channels 8 --rounds 3 at K=64). The
+    per-session cap fix is what makes this work at all: with the old
+    cumulative clock a run already past the cap advanced one epoch per
+    session.
+
+    The on-card CUDA resume test runs first and must report one pass. It
+    earned its place: it caught the RNG-state-on-GPU bug that a CPU-only
+    test could not, and a bundle that shipped no tests at all.
+
+    Results go to results_beams_k64_e30, so the epoch-24 files cannot be
+    mistaken for these.
+    """
+    cells = [
+        md("""
+# Finish the headline runs: epochs 25-30
+
+Both seeds of beams + channels 8 at K=64 stopped at epoch 24 on the time
+cap, at AUC 0.98303 / rejection 1109 for seed 0. This resumes each from its
+checkpoint and takes it to the protocol's 30 epochs.
+"""),
+        code("""
+import subprocess
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader"], capture_output=True,
+                     text=True).stdout.strip())
+"""),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code(GPU_SETUP),
+        code("""
+import glob, pathlib, shutil, subprocess, sys
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+assert cands, "attach the K=128 data-prep kernel output"
+DATA = str(pathlib.Path(cands[0]).parent)
+OUT = "/kaggle/working/results_beams_k64_e30"
+CKPT = pathlib.Path("/kaggle/working/checkpoints")
+CKPT.mkdir(parents=True, exist_ok=True)
+for seed in (0, 1):
+    name = "top_tagging_canonical__so3c_message_set__seed%d.pt" % seed
+    found = [p for p in glob.glob("/kaggle/input/**/checkpoints/" + name, recursive=True)
+             if "beams-k64" in p]
+    assert found, "attach nsanya/so3c-beams-k64-seed%d: no checkpoint %s" % (seed, name)
+    shutil.copy(found[0], CKPT / name)
+    print("seed %d: %s (%d bytes)" % (seed, found[0], (CKPT / name).stat().st_size))
+print("data:", DATA)
+"""),
+        code("""
+# The resume path only breaks on a GPU, so the test runs on the card and
+# has to pass before the session commits hours to the runs.
+r = subprocess.run([sys.executable, "-m", "pytest", "-q",
+                    "tests/test_harness.py", "-k", "cuda_resume"],
+                   cwd="/kaggle/working/repo", capture_output=True, text=True)
+print(r.stdout[-3000:]); print(r.stderr[-2000:])
+assert r.returncode == 0 and "1 passed" in r.stdout, "CUDA resume test did not pass; not starting the runs"
+"""),
+        code("""
+import time
+for seed in ("0", "1"):
+    print("=== seed %s ===" % seed, flush=True)
+    t_seed = time.perf_counter()
+    run(["benchmarks.run_top_tagging",
+         "--cache-dir", DATA, "--representation", "constituents",
+         "--canonical-splits", "--epochs", "30", "--normalize", "global",
+         "--seed", seed, "--device", "cuda", "--dtype", "float32",
+         "--batch-size", "256", "--n-constituents", "64",
+         "--rounds", "3", "--beams", "--channels", "8",
+         "--eval-chunk-size", "1024",
+         "--models", "so3c_message_set",
+         "--results-dir", OUT, "--ckpt-dir", str(CKPT),
+         "--resume", "--max-seconds", "26000"])
+    print("seed %s: this session took %.1f min" % (seed, (time.perf_counter() - t_seed) / 60))
+"""),
+        code("""
+import json, glob
+print("%-34s%9s%8s%9s%10s%10s%8s"
+      % ("model", "params", "epochs", "AUC", "rej@0.3", "rej@0.5", "hours"))
+print("%-34s%9d%8d%9.5f%10.1f%10s%8.2f"
+      % ("covariant K=64 (reference)", 9078, 30, 0.97720, 638.0, "-", 1.66))
+print("%-34s%9d%8d%9.5f%10.1f%10.1f%8.2f"
+      % ("message K=64, no beams (ref)", 13862, 30, 0.98073, 850.0, 233.0, 7.75))
+for f in sorted(glob.glob(OUT + "/*.json")):
+    r = json.load(open(f)); t = r["test_metrics"]
+    print("%-34s%9d%8d%9.5f%10.1f%10.1f%8.2f"
+          % ("beams + channels 8, seed %d" % r["seed"], r["n_params"],
+             r["epochs_run"], t["test_auc"], t["bg_rej_30"],
+             t.get("bg_rej_50", float("nan")), r["walltime_sec"] / 3600))
+    assert r["epochs_run"] == 30, "seed %d stopped at epoch %d" % (r["seed"], r["epochs_run"])
+"""),
+    ]
+    _finalise(cells, NB_DIR / "kaggle_beams_k64_finish.ipynb")
+
+
 def build_message(blob: str, seed: int = 0, k: int = 64) -> None:
     """Tier-2 item 5: covariant message passing on the canonical protocol.
 
@@ -1439,6 +1541,7 @@ def main() -> int:
     build_beams_tuning(blob)
     for seed in (0, 1):
         build_beams_k64(blob, seed=seed)
+    build_beams_k64_finish(blob)
     for k in (32, 64):
         for seed in (0, 1):
             build_message(blob, seed=seed, k=k)
