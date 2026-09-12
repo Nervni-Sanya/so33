@@ -1309,6 +1309,113 @@ for f in sorted(glob.glob(OUT + "/*.json")):
     _finalise(cells, NB_DIR / "kaggle_beams_k64_finish.ipynb")
 
 
+def build_capacity_cost(blob: str) -> None:
+    """Two questions for the last hours of the window.
+
+    c16 -- does capacity keep paying? Channels 8 with beams gave +0.00040 AUC
+    and +67 rejection over beams alone on the probe protocol, where the same
+    change WITHOUT beams had been flat. If 16 holds that slope, capacity is
+    still not the binding constraint.
+
+    K=128 cost -- is more of the jet reachable at all? The structural gap to
+    LorentzNet and PELICAN is that they use every constituent (up to 200) and
+    this model uses 64. At K=64 it costs 1272 s per epoch on the full
+    training set and the pairwise terms grow as K^2, so K=128 is 30+ h per
+    seed unless the graph is sparsified. kNN measured useless at K=32 (0.0011
+    AUC lost for 2 percent of the wall clock saved) because expm_so3c and the
+    pooled readout dominated there -- but those grow as K while the edge
+    terms grow as K^2, so the verdict may flip. Two one-epoch runs on 100k
+    jets measure it, dense against kNN(16). They are beamless because beams
+    are implemented for the dense graph only, and what is being measured here
+    is wall clock, not accuracy.
+    """
+    probe = [
+        "--cache-dir", "DATA", "--representation", "constituents",
+        "--canonical-splits", "--normalize", "global",
+        "--seed", "0", "--device", "cuda", "--dtype", "float32",
+        "--batch-size", "256", "--models", "so3c_message_set", "--rounds", "3",
+    ]
+    configs = [
+        ("c16", ["--max-train-samples", "400000", "--epochs", "20",
+                 "--n-constituents", "32", "--eval-chunk-size", "2048",
+                 "--beams", "--channels", "16"]),
+        ("k128_dense", ["--max-train-samples", "100000", "--epochs", "1",
+                        "--n-constituents", "128", "--eval-chunk-size", "256",
+                        "--channels", "8"]),
+        ("k128_knn16", ["--max-train-samples", "100000", "--epochs", "1",
+                        "--n-constituents", "128", "--eval-chunk-size", "256",
+                        "--channels", "8", "--neighbors", "16"]),
+    ]
+    cells = [
+        md("""
+# Capacity, and whether K=128 is reachable
+
+Beams plus channels 8 took the canonical protocol to 0.98333 / 1131 at
+K=64. Two questions remain cheap enough for the last hours of this quota:
+whether channels 16 keeps the capacity slope, and whether sparsifying the
+graph makes K=128 affordable. Every published tagger ahead of us uses the
+whole jet; we use 64 constituents of up to 200.
+"""),
+        code("""
+import subprocess
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader"], capture_output=True,
+                     text=True).stdout.strip())
+"""),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code(GPU_SETUP),
+        code("""
+import glob, pathlib
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+assert cands, "attach the K=128 data-prep kernel output"
+DATA = str(pathlib.Path(cands[0]).parent)
+OUT = "/kaggle/working/results_capacity_cost"
+CKPT = "/kaggle/working/checkpoints"
+PROBE = %r
+PROBE[PROBE.index("DATA")] = DATA
+CONFIGS = %r
+import numpy as np
+d = np.load(DATA + "/top_tagging_train.npz", mmap_mode="r")
+print("data:", DATA, "| stored K =", d["constituents"].shape[1])
+""" % (probe, configs)),
+        code("""
+for tag, extra in CONFIGS:
+    print("=== %s ===" % tag, flush=True)
+    run(["benchmarks.run_top_tagging"] + PROBE + extra +
+        ["--results-dir", OUT + "/" + tag,
+         "--ckpt-dir", CKPT + "/" + tag, "--resume",
+         "--max-seconds", "26000"])
+"""),
+        code("""
+import json, glob
+print("%-12s%9s%8s%8s%9s%10s%9s"
+      % ("row", "params", "K", "epochs", "AUC", "rej@0.3", "s/epoch"))
+print("%-12s%9d%8d%8d%9.5f%10.1f%9s" % ("beams (ref)", 15038, 32, 20, 0.98088, 767.7, "115"))
+print("%-12s%9d%8d%8d%9.5f%10.1f%9s" % ("c8 (ref)", 22834, 32, 20, 0.98128, 834.4, "146"))
+rows = {}
+for tag, extra in CONFIGS:
+    K = extra[extra.index("--n-constituents") + 1]
+    for f in sorted(glob.glob(OUT + "/" + tag + "/*.json")):
+        r = json.load(open(f)); t = r["test_metrics"]
+        per = r["walltime_sec"] / max(r["epochs_run"], 1)
+        rows[tag] = per
+        print("%-12s%9d%8s%8d%9.5f%10.1f%9.0f"
+              % (tag, r["n_params"], K, r["epochs_run"], t["test_auc"],
+                 t["bg_rej_30"], per))
+if "k128_dense" in rows and "k128_knn16" in rows:
+    d, k = rows["k128_dense"], rows["k128_knn16"]
+    print()
+    print("K=128 on 100k jets: dense %.0f s/epoch, kNN(16) %.0f s/epoch, %.2fx"
+          % (d, k, d / k))
+    print("full 1.211M train, 30 epochs: dense %.1f h, kNN %.1f h"
+          % (d * 12.11 * 30 / 3600, k * 12.11 * 30 / 3600))
+    print("(K=64 with beams and channels 8 was 1272 s/epoch, 10.6 h)")
+"""),
+    ]
+    _finalise(cells, NB_DIR / "kaggle_capacity_cost.ipynb")
+
+
 def build_message(blob: str, seed: int = 0, k: int = 64) -> None:
     """Tier-2 item 5: covariant message passing on the canonical protocol.
 
@@ -1542,6 +1649,7 @@ def main() -> int:
     for seed in (0, 1):
         build_beams_k64(blob, seed=seed)
     build_beams_k64_finish(blob)
+    build_capacity_cost(blob)
     for k in (32, 64):
         for seed in (0, 1):
             build_message(blob, seed=seed, k=k)
