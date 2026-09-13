@@ -11,3 +11,7 @@ dist/
 # Benchmark outputs
 results/
 
+# Datasets and caches (11 GB): never committed; rebuilt from the sources
+# or fetched from Kaggle (nsanya/so3c-data-prep-k-128).
+data/
+checkpoints/**/*.npz

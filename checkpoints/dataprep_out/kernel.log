@@ -1,0 +1,21 @@
+[{"stream_name":"stderr","time":8.79477018,"data":"/usr/local/lib/python3.12/dist-packages/nbformat/__init__.py:96: MissingIDFieldWarning: Cell is missing an id field, this will become a hard error in future nbformat versions. You may want to use `normalize()` on your notebooks before validations (available since nbformat 5.1.4). Previous versions of nbformat are fixing this issue transparently, and will stop doing so in the future.\n"}
+,{"stream_name":"stderr","time":8.795784471,"data":"  validate(nb)\n"}
+,{"stream_name":"stderr","time":10.154649317,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
+,{"stream_name":"stderr","time":10.154694275,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
+,{"stream_name":"stderr","time":10.154701354,"data":"0.00s - to python to disable frozen modules.\n"}
+,{"stream_name":"stderr","time":10.154706691,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
+,{"stream_name":"stderr","time":11.076903747,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
+,{"stream_name":"stderr","time":11.077192019,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
+,{"stream_name":"stderr","time":11.077209413,"data":"0.00s - to python to disable frozen modules.\n"}
+,{"stream_name":"stderr","time":11.077215918,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
+,{"stream_name":"stdout","time":12.558356904,"data":"[Errno 2] No such file or directory: '/kaggle/working/so33!pip -q install torchdiffeq huggingface_hubimport torch, numpy, pyarrowprint(torch, torch.__version__, | numpy, numpy.__version__, | pyarrow, pyarrow.__version__)'\n"}
+,{"stream_name":"stdout","time":12.558408635,"data":"/kaggle/working\n"}
+,{"stream_name":"stderr","time":16.001805514,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":16.001934594,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":16.228241243,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":16.228277643,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":17.022043047,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to notebook\n"}
+,{"stream_name":"stderr","time":17.428005955,"data":"[NbConvertApp] Writing 129232 bytes to __notebook__.ipynb\n"}
+,{"stream_name":"stderr","time":20.582823277,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to html\n"}
+,{"stream_name":"stderr","time":21.722663263,"data":"[NbConvertApp] Writing 400644 bytes to __results__.html\n"}
+]
