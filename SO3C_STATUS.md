@@ -29,7 +29,7 @@ Last updated 2026-09-13. This is the single place to start from. Commit hashes p
 - **Gap to PELICAN:** 0.0037 AUC and a factor 1.99 in rejection (from 0.0063 and 2.6 before beams).
 - **The sobering comparison (verified):** PELICAN's own 1k-parameter model (0.9835 / 1145) matches this 22.8k-parameter model. The gap is architectural, not a matter of size.
 - **Exact equivariance, measured** (float64, `87206e7`): with the beams transformed along with the jet, AUC stays 0.9684 at every boost scale (drop −0.0001); with the beams pinned to the lab it falls to 0.9332. That is exact covariance, the correct physics, and the same property PELICAN has.
-- **Reproduce:** `notebooks/kaggle_beams_k64_seed{0,1}.ipynb`, then `notebooks/kaggle_beams_k64_finish.ipynb` (both seeds stop at epoch 24 on the session cap and resume). Results are in `results_message/beams_k64/`. Ensemble: `python -m benchmarks.ensemble_scores --results-dir results_message/beams_k64`.
+- **Reproduce:** `notebooks/kaggle_beams_k64_seed{0,1}.ipynb`, then `notebooks/kaggle_beams_k64_finish.ipynb` (both seeds stop at epoch 24 on the session cap and resume). Results, the epoch-30 checkpoints of both seeds and the full kernel logs are in `results_message/beams_k64/` (weights archived from Kaggle in `a76d837`; every other SO3C run's checkpoints sit beside its results the same way). Ensemble: `python -m benchmarks.ensemble_scores --results-dir results_message/beams_k64`.
 
 ## How we got here (canonical protocol)
 
@@ -134,6 +134,7 @@ One seed per row, so a gain near +0.0004 AUC is at the edge of noise; confirm an
 | Large subagent workflows | 45 agents: 38 failed on the usage limit; 6 agents: 3 failed | keep workflows small; verify bounded claims directly |
 | Unverified agent output | a findings file said "zero runtime" for f_α and cited abstracts that do not make the claim | verify before building on it; record the verification |
 | Separate commands in a Bash script keep running after one fails | a status-doc edit raised and exited non-zero, and the `git commit` on the next line ran anyway (`6771158` has the code but not the doc update it was meant to carry) | chain every dependent step with `&&`, or `set -e` |
+| Kaggle replaces a kernel's output when it is pushed again | trained weights and full logs of ~40 GPU-h of runs existed only in kernel outputs until `a76d837` | fetch checkpoints and logs into the results directory as soon as a run finishes |
 
 ## Compute and quota facts
 
