@@ -1416,6 +1416,129 @@ if "k128_dense" in rows and "k128_knn16" in rows:
     _finalise(cells, NB_DIR / "kaggle_capacity_cost.ipynb")
 
 
+def build_gap_screen(blob: str) -> None:
+    """Screen every candidate from the gap-to-SOTA analysis on one protocol.
+
+    Base configuration is the best probe row, beams + channels 8 (0.98128 AUC,
+    834.4 rejection on this protocol, commit c325950). Each row adds one
+    candidate, then one row combines the architectural ones:
+
+      fixes    --no-mass-input --no-self-edges: the two verified defects. The
+               per-constituent m^2 is rounding noise, and LorentzNet masks the
+               self-edge. CPU cost 1.00x.
+      vector   --vector-channel: the bivector lift discards each constituent's
+               component along the jet axis; arXiv:2606.21790 finds vector
+               channels dominant in L-GATr. CPU cost 1.10x.
+      relnorm  --relnorm-edge: LorentzNet's |x_i - x_j|^2 analogue. CPU 1.30x.
+      pair8    --pair-latent 8: a rank-2 pair state through the rounds with 7 of
+               PELICAN's 15 equivariant aggregators; by PELICAN's table 2 the
+               pair state is the likeliest carrier of its 20x parameter
+               efficiency over this model.
+      combo    vector + pair8 + fixes.
+      falpha3  --falpha 3: CPU cost 3.54x, so it runs last and a session cut
+               costs it rather than the cheaper rows.
+
+    Protocol is the probe's (K=32, canonical splits, 400k train jets, 20
+    epochs, batch 256, float32, seed 0), so every row compares directly with
+    the rows already measured. One seed per row: at this protocol a gain of
+    ~0.0004 AUC is about two seed spreads, so a winner is confirmed at K=64
+    before it is believed.
+
+    A one-epoch smoke run with every new switch at once runs first and must
+    write a result before any real row starts.
+    """
+    common = [
+        "--cache-dir", "DATA", "--representation", "constituents",
+        "--canonical-splits", "--normalize", "global",
+        "--max-train-samples", "400000",
+        "--seed", "0", "--device", "cuda", "--dtype", "float32",
+        "--batch-size", "256", "--n-constituents", "32",
+        "--eval-chunk-size", "2048", "--models", "so3c_message_set",
+        "--rounds", "3", "--beams", "--channels", "8",
+    ]
+    configs = [
+        ("fixes", ["--epochs", "20", "--no-mass-input", "--no-self-edges"]),
+        ("vector", ["--epochs", "20", "--vector-channel"]),
+        ("relnorm", ["--epochs", "20", "--relnorm-edge"]),
+        ("pair8", ["--epochs", "20", "--pair-latent", "8"]),
+        ("combo", ["--epochs", "20", "--vector-channel", "--pair-latent", "8",
+                   "--no-mass-input", "--no-self-edges"]),
+        ("falpha3", ["--epochs", "20", "--falpha", "3"]),
+    ]
+    smoke_flags = ["--vector-channel", "--pair-latent", "8", "--no-mass-input",
+                   "--no-self-edges", "--relnorm-edge", "--falpha", "3"]
+    cells = [
+        md("""
+# Gap screen: every candidate on one protocol
+
+Beams + channels 8 scores 0.98128 AUC and 834.4 rejection on this protocol.
+Each row adds one candidate from the gap-to-SOTA analysis -- the two verified
+defect fixes, a vector channel, a relative-norm edge feature, a rank-2 pair
+latent -- then the architectural ones together, then the expensive f_alpha
+embedding last.
+"""),
+        code("""
+import subprocess
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader"], capture_output=True,
+                     text=True).stdout.strip())
+"""),
+        code(UNPACK.format(blob=blob)),
+        code(RUNNER),
+        code(GPU_SETUP),
+        code("""
+import glob, pathlib
+cands = glob.glob("/kaggle/input/**/top_tagging_train.npz", recursive=True)
+assert cands, "attach the K=128 data-prep kernel output"
+DATA = str(pathlib.Path(cands[0]).parent)
+OUT = "/kaggle/working/results_gap_screen"
+CKPT = "/kaggle/working/checkpoints"
+COMMON = %r
+COMMON[COMMON.index("DATA")] = DATA
+CONFIGS = %r
+SMOKE = %r
+print("data:", DATA)
+""" % (common, configs, smoke_flags)),
+        code("""
+# Smoke: every new switch at once, one epoch on 20k jets. It must write a
+# result before the real rows are allowed to start.
+import glob
+smoke = list(COMMON)
+smoke[smoke.index("400000")] = "20000"
+run(["benchmarks.run_top_tagging"] + smoke + ["--epochs", "1"] + SMOKE +
+    ["--results-dir", "/kaggle/working/smoke"])
+assert glob.glob("/kaggle/working/smoke/*.json"), "smoke run wrote no result"
+"""),
+        code("""
+for tag, extra in CONFIGS:
+    print("=== %s ===" % tag, flush=True)
+    run(["benchmarks.run_top_tagging"] + COMMON + extra +
+        ["--results-dir", OUT + "/" + tag,
+         "--ckpt-dir", CKPT + "/" + tag, "--resume",
+         "--max-seconds", "26000"])
+"""),
+        code("""
+import json, glob
+REF_AUC, REF_REJ = 0.98128, 834.4
+print("%-9s%9s%9s%10s%10s%10s%9s%8s"
+      % ("row", "params", "AUC", "dAUC", "rej@0.3", "d rej", "rej@0.5", "hours"))
+print("%-9s%9d%9.5f%10s%10.1f%10s%9s%8.2f" % ("beams", 15038, 0.98088, "-", 767.7, "-", "207.7", 0.64))
+print("%-9s%9d%9.5f%10s%10.1f%10s%9s%8.2f" % ("c8 (base)", 22834, REF_AUC, "-", REF_REJ, "-", "225.9", 0.81))
+for tag, extra in CONFIGS:
+    for f in sorted(glob.glob(OUT + "/" + tag + "/*.json")):
+        r = json.load(open(f)); t = r["test_metrics"]
+        print("%-9s%9d%9.5f%+10.5f%10.1f%+10.1f%9.1f%8.2f"
+              % (tag, r["n_params"], t["test_auc"], t["test_auc"] - REF_AUC,
+                 t["bg_rej_30"], t["bg_rej_30"] - REF_REJ,
+                 t.get("bg_rej_50", float("nan")), r["walltime_sec"] / 3600))
+print()
+print("one seed per row: treat about +0.0004 AUC as the edge of noise, and")
+print("confirm any winner at K=64 before believing it.")
+"""),
+    ]
+    _finalise(cells, NB_DIR / "kaggle_gap_screen.ipynb")
+
+
 def build_message(blob: str, seed: int = 0, k: int = 64) -> None:
     """Tier-2 item 5: covariant message passing on the canonical protocol.
 
@@ -1650,6 +1773,7 @@ def main() -> int:
         build_beams_k64(blob, seed=seed)
     build_beams_k64_finish(blob)
     build_capacity_cost(blob)
+    build_gap_screen(blob)
     for k in (32, 64):
         for seed in (0, 1):
             build_message(blob, seed=seed, k=k)

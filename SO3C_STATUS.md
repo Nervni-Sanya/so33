@@ -99,6 +99,14 @@ Both are now switchable and default to the old behaviour: `--no-mass-input --no-
 
 Full agent text: `so3c_notes/gap_to_sota_2026-09-13.md`. Three of the workflow's six agents failed on the usage limit, so the findings there are unranked.
 
+## Next GPU window (opens 2026-09-19)
+
+`notebooks/kaggle_gap_screen.ipynb` (kernel `nsanya/so3c-gap-screen`) is built and verified but **not pushed**: the current window is spent. It screens every implemented candidate on the K=32 probe protocol (400k train jets, 20 epochs, seed 0) against beams + channels 8 (0.98128 / 834.4, `c325950`): the two defect fixes, the vector channel, the relative-norm edge, the pair latent, the three architectural changes combined, and f_alpha last because of its CPU cost. A one-epoch smoke run with every switch at once must write a result before any row starts. Estimated ~8.5 GPU-h.
+
+Before it was committed: the config lines were parsed and checked (six rows in order, base configuration, protocol, every switch in the smoke run), and the embedded code bundle was decoded into an empty directory, where it shipped the tests and the provenance fix and built and ran the all-switches model.
+
+One seed per row, so a gain near +0.0004 AUC is at the edge of noise; confirm any winner at K=64 before believing it. Estimated K=64 cost per 30-epoch seed, from CPU ratios that have misled before: base 10.6 h, vector channel 11.6 h, pair latent 16.5 h, all three architectural changes 17.4 h. After the screen, a 30 GPU-h window leaves room for one or two confirmation seeds.
+
 ## Infrastructure traps
 
 | trap | what happened | fix |

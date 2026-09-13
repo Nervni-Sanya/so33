@@ -1,0 +1,15 @@
+{
+  "id": "nsanya/so3c-gap-screen",
+  "title": "SO3C gap screen",
+  "code_file": "kaggle_gap_screen.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [
+    "nsanya/so3c-data-prep-k-128"
+  ]
+}
