@@ -70,6 +70,8 @@ Last updated 2026-09-13. This is the single place to start from. Commit hashes p
 
 ### Verified defects in the current model (free to fix)
 
+Both are now switchable and default to the old behaviour: `--no-mass-input --no-self-edges` (22634 params on beams + channels 8, CPU cost 1.00x the headline, `6771158`). Not yet run on GPU.
+
 - **m² fed as noise.** `h_init` takes `asinh(m²)` per node, and three of the seven `_minkowski_stats` readout features are per-particle m² moments. All of it is rounding noise (see Closed).
 - **Self-edges in the dense graph.** The dense path includes `a = b` in the scalar message sum and counts N, not N−1, in the denominator. The flow itself is unaffected, since `z_a × w_aa z_a = 0`. LorentzNet masks the self-edge; our sparse path already excludes it.
 
@@ -85,8 +87,8 @@ Last updated 2026-09-13. This is the single place to start from. Commit hashes p
 | candidate | mechanism | note |
 |---|---|---|
 | True multiplicity as a jet scalar | multiplicity separates classes (signal mean 54.7, background 43.4 constituents) and is clipped at 64 for 17.8% of jets | Lorentz invariant; count from the K=128 data before slicing |
-| Relative-norm edge feature d_ab = s_aa + s_bb − 2 s_ab | LorentzNet Eq 3.2 feeds ‖x_i − x_j‖²; not recoverable after asinh | +2C edge inputs |
-| f_α multi-resolution embedding, learnable exponents | PELICAN Sec 3.1: ((1+x)^(α²) − 1)/α², α initialised over [0.05, 0.5] | **not** zero-runtime for us, contrary to the agent: PELICAN applies it to one dot-product channel, we would apply it to 6C pair features |
+| Relative-norm edge feature d_ab = s_aa + s_bb − 2 s_ab | LorentzNet Eq 3.2 feeds ‖x_i − x_j‖²; not recoverable after asinh | implemented, `--relnorm-edge` (`6771158`); CPU cost 1.30x the headline |
+| f_α multi-resolution embedding, learnable exponents | PELICAN Sec 3.1: ((1+x)^(α²) − 1)/α², α initialised over [0.05, 0.5] | implemented, `--falpha n` (`6771158`). **Not** zero-runtime as the agent claimed: at n=3 on beams + channels 8, K=64, CPU cost is **3.54x the headline** (~37.5 h per 30-epoch seed). CPU ratios misled before (kNN), so measure on GPU before any full run |
 | N^α / N̄^α aggregation rescaling | sum-vs-mean semantics; our flow angle scales with Σ_b w_b z_b | ~0 runtime |
 | Time-axis reference particle (1,0,0,0) | a third symmetry-breaking reference, as in L-GATr | 1.03× cost |
 | Softmax attention over w_b | normalised aggregation; needed for depth | ~1.05× |
@@ -122,6 +124,7 @@ Full agent text: `so3c_notes/gap_to_sota_2026-09-13.md`. Three of the workflow's
 | Bash tool collapses `\\` to `\` | `\times` became TAB + "imes" in a LaTeX edit | write files containing backslashes with the Write tool, or build them with `chr(92)` |
 | Large subagent workflows | 45 agents: 38 failed on the usage limit; 6 agents: 3 failed | keep workflows small; verify bounded claims directly |
 | Unverified agent output | a findings file said "zero runtime" for f_α and cited abstracts that do not make the claim | verify before building on it; record the verification |
+| Separate commands in a Bash script keep running after one fails | a status-doc edit raised and exited non-zero, and the `git commit` on the next line ran anyway (`6771158` has the code but not the doc update it was meant to carry) | chain every dependent step with `&&`, or `set -e` |
 
 ## Compute and quota facts
 
