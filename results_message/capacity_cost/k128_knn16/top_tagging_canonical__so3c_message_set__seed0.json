@@ -1,0 +1,53 @@
+{
+  "experiment": "top_tagging_canonical",
+  "dataset": "top_tagging_constituents(k=128,norm=global,split=canonical)",
+  "model": "so3c_message_set",
+  "family": "equivariant_set",
+  "seed": 0,
+  "n_params": 21658,
+  "n_train": 100000,
+  "n_val": 403000,
+  "n_test": 404000,
+  "n_features": 4,
+  "walltime_sec": 191.14233278099982,
+  "epochs_run": 1,
+  "train_metrics": {
+    "final_train_acc": 0.88762,
+    "final_val_acc": 0.9050546288490295,
+    "best_val_acc": 0.9050546288490295
+  },
+  "test_metrics": {
+    "test_acc": 0.906408429145813,
+    "test_auc": 0.9689728822180042,
+    "bg_rej_30": 206.66734902763562,
+    "bg_rej_50": 79.93428345209819
+  },
+  "config": {
+    "epochs": 1,
+    "batch_size": 256,
+    "lr": 0.003,
+    "weight_decay": 0.0,
+    "grad_clip": 1.0,
+    "cosine_schedule": true,
+    "optimizer": "adam",
+    "schedule": "cosine",
+    "warmup_epochs": 4,
+    "early_stop_patience": null,
+    "seed": 0,
+    "device": "cuda",
+    "eval_chunk_size": 256,
+    "ckpt_path": "/kaggle/working/checkpoints/k128_knn16/top_tagging_canonical__so3c_message_set__seed0.pt",
+    "ckpt_every": 1,
+    "resume": true,
+    "max_seconds": 26000.0
+  },
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 0.2759991066265106,
+      "train_acc": 0.88762,
+      "val_loss": 0.22605274617671967,
+      "val_acc": 0.9050546288490295
+    }
+  ]
+}
