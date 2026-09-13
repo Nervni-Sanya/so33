@@ -198,6 +198,8 @@ def run_tabular_experiment(
             "dataset":       split.name,
             "model":         name,
             "family":        family,
+            "so3c_kwargs":   dict(so3c_kwargs or {}),
+            "dtype":         str(dtype).replace("torch.", ""),
             "seed":          seed,
             "n_params":      train_res.n_params,
             "n_train":       len(split.X_train),
