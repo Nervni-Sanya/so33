@@ -123,6 +123,17 @@ def main(argv: list[str] | None = None) -> int:
                         "network can see lab-frame energies and momenta.")
     p.add_argument("--dropout", type=float, default=None,
                    help="so3c_message_set: dropout in the readout MLP.")
+    p.add_argument("--no-mass-input", action="store_true",
+                   help="so3c_message_set: drop the per-constituent m^2, which "
+                        "is rounding noise on this dataset.")
+    p.add_argument("--no-self-edges", action="store_true",
+                   help="so3c_message_set: exclude a = b from the dense graph.")
+    p.add_argument("--relnorm-edge", action="store_true",
+                   help="so3c_message_set: add d_ab = s_aa + s_bb - 2 s_ab to "
+                        "the edge features.")
+    p.add_argument("--falpha", type=int, default=None,
+                   help="so3c_message_set: number of learnable signed Box-Cox "
+                        "compressions for the pair invariants (0 = asinh).")
     p.add_argument("--ckpt-dir", type=str, default=None,
                    help="Directory for training checkpoints; --resume needs it.")
     p.add_argument("--resume", action="store_true",
@@ -181,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
         ("T", args.flow_T),
         ("beams", True if args.beams else None),
         ("dropout", args.dropout),
+        ("mass_input", False if args.no_mass_input else None),
+        ("self_edges", False if args.no_self_edges else None),
+        ("relnorm_edge", True if args.relnorm_edge else None),
+        ("falpha", args.falpha),
     ) if v is not None} or None
 
     kwargs = dict(

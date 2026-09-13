@@ -464,6 +464,131 @@ def test_message_set_beams_are_covariant_inputs() -> None:
     print(f"  ✓ beams: joint {joint:.1e}, jet only {jet_only:.1e}, z-rotation {z_rot:.1e}")
 
 
+def test_message_set_bundle_defaults_are_unchanged() -> None:
+    """The four new switches default to the model the headline was measured with.
+
+    Parameter counts are pinned to the published configurations, and a model
+    built with the defaults written out explicitly produces identical logits.
+    """
+    from benchmarks.models import build_model
+
+    counts = {
+        (): 13862,
+        (("beams", True),): 15038,
+        (("beams", True), ("channels", 8)): 22834,
+    }
+    for kw, expected in counts.items():
+        m = build_model("so3c_message_set", in_features=4, out_features=2,
+                        representation="constituents", so3c_kwargs=dict(kw))
+        n = sum(q.numel() for q in m.parameters())
+        assert n == expected, f"{dict(kw)}: {n} params, expected {expected}"
+
+    gen = torch.Generator().manual_seed(8)
+    x = _random_jets(4, 10, gen)
+    torch.manual_seed(2)
+    a = build_model("so3c_message_set", in_features=4, out_features=2,
+                    representation="constituents",
+                    so3c_kwargs={"beams": True}).eval()
+    torch.manual_seed(2)
+    b = build_model("so3c_message_set", in_features=4, out_features=2,
+                    representation="constituents",
+                    so3c_kwargs={"beams": True, "mass_input": True,
+                                 "self_edges": True, "relnorm_edge": False,
+                                 "falpha": 0}).eval()
+    with torch.no_grad():
+        assert torch.equal(a(x), b(x)), "explicit defaults changed the logits"
+    print("  ✓ bundle defaults reproduce the published models")
+
+
+def test_message_set_bundle_is_exactly_covariant() -> None:
+    """All four switches on, with and without beams: still exactly covariant.
+
+    They only change which invariants are computed (no m^2, d_ab added, no
+    self-edge) and how they are compressed (f_alpha), so moving the jet --
+    and the beams, when present -- by one Lorentz matrix must leave the logits
+    unchanged. Each switch must also actually change the output, or the test
+    would pass for a switch that is never read.
+    """
+    from benchmarks.models import build_model
+    from so3c.lift import random_lorentz_pair
+
+    bundle = {"mass_input": False, "self_edges": False,
+              "relnorm_edge": True, "falpha": 3}
+    gen = torch.Generator().manual_seed(44)
+    x = _random_jets(6, 12, gen)
+    L, _ = random_lorentz_pair(rot_scale=1.0, boost_scale=1.0, generator=gen)
+    x_t = torch.cat([x[..., :4] @ L.T, x[..., 4:]], dim=-1)
+
+    for beams in (False, True):
+        torch.manual_seed(9)
+        m = build_model("so3c_message_set", in_features=4, out_features=2,
+                        representation="constituents",
+                        so3c_kwargs=dict(bundle, beams=beams)).eval()
+        with torch.no_grad():
+            for r in range(m.rounds):
+                m.w_head[r].weight.normal_(0, 0.5, generator=gen)
+                m.w_head[r].bias.normal_(0, 0.5, generator=gen)
+                m.mix[r].normal_(0, 0.3, generator=gen)
+            base = m(x)
+            if beams:
+                beams0 = m.beam_p4.clone()
+                m.beam_p4.copy_(beams0 @ L.T)
+            err = (m(x_t) - base).abs().max().item()
+            if beams:
+                m.beam_p4.copy_(beams0)
+        assert err < 1e-6, f"bundle (beams={beams}) lost covariance: {err:.2e}"
+        print(f"  ✓ bundle, beams={beams}: covariant ({err:.1e})")
+
+    gen = torch.Generator().manual_seed(45)
+    x = _random_jets(6, 12, gen)
+    for key, value in bundle.items():
+        torch.manual_seed(3)
+        ref = build_model("so3c_message_set", in_features=4, out_features=2,
+                          representation="constituents",
+                          so3c_kwargs={"beams": True}).eval()
+        torch.manual_seed(3)
+        alt = build_model("so3c_message_set", in_features=4, out_features=2,
+                          representation="constituents",
+                          so3c_kwargs={"beams": True, key: value}).eval()
+        ref_sd, alt_sd = ref.state_dict(), alt.state_dict()
+        shared = {k: v for k, v in ref_sd.items()
+                  if k in alt_sd and alt_sd[k].shape == v.shape}
+        alt.load_state_dict(shared, strict=False)
+        with torch.no_grad():
+            for mod in (ref, alt):
+                g = torch.Generator().manual_seed(46)
+                for r in range(mod.rounds):
+                    mod.w_head[r].weight.normal_(0, 0.5, generator=g)
+                    mod.w_head[r].bias.normal_(0, 0.5, generator=g)
+            moved = (ref(x) - alt(x)).abs().max().item()
+        assert moved > 1e-6, f"switch {key}={value} changed nothing"
+        print(f"  ✓ switch {key}={value} is wired in ({moved:.1e})")
+
+
+def test_message_set_falpha_learns() -> None:
+    """The f_alpha exponents receive gradient, and f_alpha is odd and finite."""
+    from benchmarks.models import build_model
+    from benchmarks.so3c_models import _SignedFAlpha
+
+    f = _SignedFAlpha(3, torch.float64)
+    xs = torch.tensor([-50.0, -1.0, -1e-6, 0.0, 1e-6, 1.0, 50.0], dtype=torch.float64)
+    ys = f(xs.unsqueeze(-1))
+    assert torch.isfinite(ys).all()
+    assert torch.allclose(f((-xs).unsqueeze(-1)), -ys)
+    assert torch.all(ys[3] == 0)
+
+    gen = torch.Generator().manual_seed(12)
+    x = _random_jets(4, 10, gen)
+    torch.manual_seed(4)
+    m = build_model("so3c_message_set", in_features=4, out_features=2,
+                    representation="constituents",
+                    so3c_kwargs={"beams": True, "falpha": 3})
+    m(x).sum().backward()
+    g = m.falpha_embed.alpha.grad
+    assert g is not None and torch.isfinite(g).all() and g.abs().sum() > 0
+    print(f"  ✓ f_alpha gradient {g.abs().sum().item():.2e}")
+
+
 if __name__ == "__main__":
     print("\n── so3c benchmark-model tests ──")
     test_generator_invariants()
@@ -478,4 +603,7 @@ if __name__ == "__main__":
     test_message_set_is_equivariant_when_excited()
     test_message_set_neighbour_graph_is_equivariant()
     test_message_set_beams_are_covariant_inputs()
+    test_message_set_bundle_defaults_are_unchanged()
+    test_message_set_bundle_is_exactly_covariant()
+    test_message_set_falpha_learns()
     print("All so3c model tests passed.\n")

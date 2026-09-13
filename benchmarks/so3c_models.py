@@ -488,6 +488,27 @@ class SO3CCovariantSetClassifier(nn.Module):
         return 1e-3 * (last.weight.pow(2).sum() + last.bias.pow(2).sum())
 
 
+class _SignedFAlpha(nn.Module):
+    """A bank of learnable signed Box-Cox compressions (PELICAN Sec 3.1).
+
+    f_a(x) = sign(x) ((1 + |x|)^(a^2) - 1) / a^2, for n trainable a initialised
+    geometrically over [0.05, 0.5]. As a -> 0 it tends to sign(x) log(1 + |x|),
+    close to the asinh used elsewhere; larger a keeps more of the linear range.
+    It is odd and C^1 at zero, so it accepts the signed complex-bilinear
+    invariants this model uses. Input (..., F) -> output (..., F * n).
+    """
+
+    def __init__(self, n: int, dtype: torch.dtype) -> None:
+        super().__init__()
+        a0 = torch.logspace(-1.30103, -0.30103, n, dtype=dtype)   # 0.05 .. 0.5
+        self.alpha = nn.Parameter(a0)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        a2 = self.alpha.pow(2).clamp_min(1e-4)
+        y = torch.expm1(a2 * torch.log1p(x.abs().unsqueeze(-1))) / a2
+        return (torch.sign(x).unsqueeze(-1) * y).flatten(-2)
+
+
 class SO3CMessageSetClassifier(nn.Module):
     """Covariant message passing: several rounds of the SO3CCovariantSet
     connection, with a scalar channel running alongside the vector one.
@@ -557,6 +578,16 @@ class SO3CMessageSetClassifier(nn.Module):
     test can transform them), the jet total P stays a sum over real
     constituents, readouts pool real constituents only, and the architecture
     remains exactly Lorentz covariant when jet and beams move together.
+
+    Four switches, each defaulting to the behaviour the headline results were
+    measured with. ``mass_input=False`` drops the per-constituent m^2, which on
+    this dataset is rounding noise (the constituents are massless).
+    ``self_edges=False`` removes a = b from the dense graph. ``relnorm_edge``
+    adds d_ab = s_aa + s_bb - 2 s_ab to the edge features, the analogue of
+    LorentzNet's |x_i - x_j|^2. ``falpha=n`` replaces asinh on the pair
+    invariants with n learnable compressions. All four only change which
+    invariants are computed or how they are compressed, so exact covariance is
+    untouched.
     """
 
     def __init__(
@@ -574,6 +605,10 @@ class SO3CMessageSetClassifier(nn.Module):
         beams: bool = False,
         beam_energy: float = 1.0,
         dropout: float = 0.0,
+        mass_input: bool = True,
+        self_edges: bool = True,
+        relnorm_edge: bool = False,
+        falpha: int = 0,
         dtype: torch.dtype = torch.float64,
     ) -> None:
         super().__init__()
@@ -584,6 +619,10 @@ class SO3CMessageSetClassifier(nn.Module):
         self.neighbors = neighbors
         self.T = T
         self.beams = beams
+        self.mass_input = mass_input
+        self.self_edges = self_edges
+        self.relnorm_edge = relnorm_edge
+        self.falpha = falpha
         if beams and neighbors is not None:
             raise ValueError("beams are implemented for the dense graph only")
         if beams:
@@ -603,10 +642,17 @@ class SO3CMessageSetClassifier(nn.Module):
         # Scalar states are seeded from per-particle invariants only:
         # Re/Im (z.z) and the Minkowski mass <p, p>.
         # With beams, also <p, b+>, <p, b-> and a constituent/beam label.
-        self.h_init = (nn.Linear(6 if beams else 3, scalar_dim).to(dtype)
+        n_node = (3 if beams else 0) + 2 + (1 if mass_input else 0)
+        self.h_init = (nn.Linear(n_node, scalar_dim).to(dtype)
                        if scalar_dim else None)
 
-        edge_in = 6 * channels + 2 * scalar_dim
+        # Pair invariants: Re/Im s_ab, plus Re/Im d_ab with relnorm_edge; they
+        # take the f_alpha bank when falpha > 0. Row and column diagonals keep
+        # asinh.
+        n_pair = (4 if relnorm_edge else 2) * channels
+        self.falpha_embed = _SignedFAlpha(falpha, dtype) if falpha else None
+        edge_in = (n_pair * (falpha if falpha else 1) + 4 * channels
+                   + 2 * scalar_dim)
         self.edge = nn.ModuleList()
         self.w_head = nn.ModuleList()
         self.msg_head = nn.ModuleList()
@@ -632,7 +678,8 @@ class SO3CMessageSetClassifier(nn.Module):
             self.register_parameter("mix", None)
 
         n_ch_pairs = channels * (channels + 1) // 2
-        in_features = (channels * 11 + 2 * n_ch_pairs + 2 * scalar_dim + 7
+        in_features = (channels * 11 + 2 * n_ch_pairs + 2 * scalar_dim
+                       + (7 if mass_input else 4)
                        + ((2 * scalar_dim + 2) if beams else 0))
         layers = [nn.Linear(in_features, hidden), nn.ReLU()]
         if dropout > 0:
@@ -686,8 +733,9 @@ class SO3CMessageSetClassifier(nn.Module):
 
         if self.scalar_dim:
             q = (z * z).sum(dim=-1)
-            m2 = minkowski_inner(p4_all, p4_all) * mask_all
-            node_inv = [q.real, q.imag, m2]
+            node_inv = [q.real, q.imag]
+            if self.mass_input:
+                node_inv.append(minkowski_inner(p4_all, p4_all) * mask_all)
             if self.beams:
                 # <p, b+-> = E -+ p_z (times the beam energy): the lab-frame
                 # energy and longitudinal momentum of each constituent, which
@@ -718,7 +766,14 @@ class SO3CMessageSetClassifier(nn.Module):
             denom = edge_mask.sum(-1).clamp_min(1.0)             # (B, K)
         else:
             pair_mask = mask_all.unsqueeze(-1) * mask_all.unsqueeze(-2)
-            denom = mask_all.sum(dim=-1).clamp_min(1.0).unsqueeze(-1).expand(B, K)
+            if self.self_edges:
+                denom = mask_all.sum(dim=-1).clamp_min(1.0).unsqueeze(-1).expand(B, K)
+            else:
+                # a = b contributes nothing to the flow (z_a x z_a = 0) but it
+                # does enter the scalar messages and the count.
+                eye = torch.eye(K, dtype=pair_mask.dtype, device=pair_mask.device)
+                pair_mask = pair_mask * (1.0 - eye)
+                denom = pair_mask.sum(dim=-1).clamp_min(1.0)
 
         for r in range(self.rounds):
             if sparse:
@@ -742,8 +797,15 @@ class SO3CMessageSetClassifier(nn.Module):
                         if self.scalar_dim else [])
                 emask = pair_mask.unsqueeze(-1)
 
+            pair = [s_ab.real, s_ab.imag]
+            if self.relnorm_edge:
+                d_ab = row + col - 2.0 * s_ab
+                pair += [d_ab.real, d_ab.imag]
+            pair = torch.cat(pair, dim=-1)
+            pair = (self.falpha_embed(pair) if self.falpha_embed is not None
+                    else torch.asinh(pair))
             e = torch.cat([
-                torch.asinh(s_ab.real), torch.asinh(s_ab.imag),
+                pair,
                 torch.asinh(row.real), torch.asinh(row.imag),
                 torch.asinh(col.real), torch.asinh(col.imag),
             ] + scal, dim=-1)                                    # (B,K,*,6C+2D)
@@ -805,7 +867,10 @@ class SO3CMessageSetClassifier(nn.Module):
                 minkowski_inner(Pj, self.beam_p4[0].expand_as(Pj)),
                 minkowski_inner(Pj, self.beam_p4[1].expand_as(Pj))], dim=-1)))
         return self.mlp(torch.cat(
-            [per_ch, cross] + pooled + [_minkowski_stats(p4, mask)] + extra,
+            [per_ch, cross] + pooled
+            + [_minkowski_stats(p4, mask) if self.mass_input
+               else _minkowski_stats(p4, mask)[:, 3:]]
+            + extra,
             dim=-1))
 
     def regularization_loss(self) -> torch.Tensor:
