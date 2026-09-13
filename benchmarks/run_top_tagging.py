@@ -134,6 +134,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--falpha", type=int, default=None,
                    help="so3c_message_set: number of learnable signed Box-Cox "
                         "compressions for the pair invariants (0 = asinh).")
+    p.add_argument("--vector-channel", action="store_true",
+                   help="so3c_message_set: carry a covariant 4-vector per node "
+                        "beside the bivector, which discards each constituent's "
+                        "component along the jet axis.")
     p.add_argument("--ckpt-dir", type=str, default=None,
                    help="Directory for training checkpoints; --resume needs it.")
     p.add_argument("--resume", action="store_true",
@@ -196,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
         ("self_edges", False if args.no_self_edges else None),
         ("relnorm_edge", True if args.relnorm_edge else None),
         ("falpha", args.falpha),
+        ("vector_channel", True if args.vector_channel else None),
     ) if v is not None} or None
 
     kwargs = dict(

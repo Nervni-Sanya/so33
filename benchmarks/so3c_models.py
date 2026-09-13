@@ -588,6 +588,15 @@ class SO3CMessageSetClassifier(nn.Module):
     invariants with n learnable compressions. All four only change which
     invariants are computed or how they are compressed, so exact covariance is
     untouched.
+
+    Vector channel. The bivector lift bivec(p_a, P) is unchanged under
+    p_a -> p_a + lambda P, so it discards each constituent's component along
+    the jet axis. ``vector_channel=True`` carries a covariant 4-vector v_a per
+    node, initialised to p_a, with Minkowski-product edge invariants, a
+    LorentzNet-style update v_a <- v_a + sum_b u_ab v_b / n from a zero-init
+    head, and pooled vector invariants in the readout. Every weight is a
+    function of invariants and every update an invariant-weighted linear
+    combination of 4-vectors, so covariance is exact. Dense graph only.
     """
 
     def __init__(
@@ -609,6 +618,7 @@ class SO3CMessageSetClassifier(nn.Module):
         self_edges: bool = True,
         relnorm_edge: bool = False,
         falpha: int = 0,
+        vector_channel: bool = False,
         dtype: torch.dtype = torch.float64,
     ) -> None:
         super().__init__()
@@ -623,6 +633,9 @@ class SO3CMessageSetClassifier(nn.Module):
         self.self_edges = self_edges
         self.relnorm_edge = relnorm_edge
         self.falpha = falpha
+        self.vector_channel = vector_channel
+        if vector_channel and neighbors is not None:
+            raise ValueError("the vector channel is implemented for the dense graph only")
         if beams and neighbors is not None:
             raise ValueError("beams are implemented for the dense graph only")
         if beams:
@@ -652,11 +665,12 @@ class SO3CMessageSetClassifier(nn.Module):
         n_pair = (4 if relnorm_edge else 2) * channels
         self.falpha_embed = _SignedFAlpha(falpha, dtype) if falpha else None
         edge_in = (n_pair * (falpha if falpha else 1) + 4 * channels
-                   + 2 * scalar_dim)
+                   + 2 * scalar_dim + (2 if vector_channel else 0))
         self.edge = nn.ModuleList()
         self.w_head = nn.ModuleList()
         self.msg_head = nn.ModuleList()
         self.node = nn.ModuleList()
+        self.v_head = nn.ModuleList()
         for _ in range(rounds):
             self.edge.append(nn.Sequential(
                 nn.Linear(edge_in, act_hidden), nn.Tanh()).to(dtype))
@@ -664,6 +678,11 @@ class SO3CMessageSetClassifier(nn.Module):
             nn.init.zeros_(head.weight)      # identity flow at init
             nn.init.zeros_(head.bias)
             self.w_head.append(head)
+            if vector_channel:
+                vh = nn.Linear(act_hidden, 1).to(dtype)
+                nn.init.zeros_(vh.weight)      # identity vector update at init
+                nn.init.zeros_(vh.bias)
+                self.v_head.append(vh)
             if scalar_dim:
                 self.msg_head.append(nn.Linear(act_hidden, msg_dim).to(dtype))
                 self.node.append(nn.Sequential(
@@ -680,7 +699,8 @@ class SO3CMessageSetClassifier(nn.Module):
         n_ch_pairs = channels * (channels + 1) // 2
         in_features = (channels * 11 + 2 * n_ch_pairs + 2 * scalar_dim
                        + (7 if mass_input else 4)
-                       + ((2 * scalar_dim + 2) if beams else 0))
+                       + ((2 * scalar_dim + 2) if beams else 0)
+                       + ((4 + (2 if beams else 0)) if vector_channel else 0))
         layers = [nn.Linear(in_features, hidden), nn.ReLU()]
         if dropout > 0:
             layers.append(nn.Dropout(dropout))
@@ -751,6 +771,7 @@ class SO3CMessageSetClassifier(nn.Module):
         else:
             h = None
 
+        v = (p4_all * mask_all.unsqueeze(-1)) if self.vector_channel else None
         w = torch.complex(self.channel_weights[:, 0],
                           self.channel_weights[:, 1])            # (C,)
         zc = w[None, :, None, None] * z[:, None, :, :]           # (B, C, K, 3)
@@ -786,6 +807,7 @@ class SO3CMessageSetClassifier(nn.Module):
                 scal = ([h.unsqueeze(2).expand(B, K, k, D), h[bat, idx]]
                         if self.scalar_dim else [])
                 emask = edge_mask.unsqueeze(-1)
+                vfeat = []
             else:
                 S = zc @ zc.transpose(-1, -2)                    # (B, C, K, K)
                 sd = torch.diagonal(S, dim1=-2, dim2=-1).permute(0, 2, 1)
@@ -796,6 +818,18 @@ class SO3CMessageSetClassifier(nn.Module):
                          h.unsqueeze(1).expand(B, K, K, D)]
                         if self.scalar_dim else [])
                 emask = pair_mask.unsqueeze(-1)
+                if self.vector_channel:
+                    Ev, pv = v[..., 0], v[..., 1:]
+                    G = (Ev.unsqueeze(-1) * Ev.unsqueeze(-2)
+                         - pv @ pv.transpose(-1, -2))               # (B, K, K)
+                    gd = torch.diagonal(G, dim1=-2, dim2=-1)
+                    vfeat = [
+                        torch.asinh(G).unsqueeze(-1),
+                        torch.asinh(gd.unsqueeze(-1) + gd.unsqueeze(-2)
+                                    - 2.0 * G).unsqueeze(-1),
+                    ]
+                else:
+                    vfeat = []
 
             pair = [s_ab.real, s_ab.imag]
             if self.relnorm_edge:
@@ -808,10 +842,14 @@ class SO3CMessageSetClassifier(nn.Module):
                 pair,
                 torch.asinh(row.real), torch.asinh(row.imag),
                 torch.asinh(col.real), torch.asinh(col.imag),
-            ] + scal, dim=-1)                                    # (B,K,*,6C+2D)
+            ] + scal + vfeat, dim=-1)                                    # (B,K,*,6C+2D)
 
             hid = self.edge[r](e)
             wts = self.w_head[r](hid) * emask                    # (B, K, *, C)
+            if self.vector_channel:
+                u = self.v_head[r](hid).squeeze(-1) * pair_mask   # (B, K, K)
+                v = v + (u @ v) / denom.unsqueeze(-1)
+                v = v * mask_all.unsqueeze(-1)
 
             if self.scalar_dim:
                 msg = self.msg_head[r](hid) * emask              # (B, K, *, M)
@@ -866,6 +904,20 @@ class SO3CMessageSetClassifier(nn.Module):
             extra.append(torch.asinh(torch.stack([
                 minkowski_inner(Pj, self.beam_p4[0].expand_as(Pj)),
                 minkowski_inner(Pj, self.beam_p4[1].expand_as(Pj))], dim=-1)))
+        if self.vector_channel:
+            vr = v[:, :K_real] * mask.unsqueeze(-1)
+            V = vr.sum(dim=1)                                    # (B, 4)
+            vV = minkowski_inner(vr, V.unsqueeze(1).expand_as(vr)) * mask
+            vv = minkowski_inner(vr, vr) * mask
+            n_r = mask.sum(dim=-1).clamp_min(1.0)
+            vfeats = [minkowski_inner(V, V), vV.sum(dim=-1) / n_r,
+                      vv.sum(dim=-1) / n_r,
+                      torch.where(mask.bool(), vV,
+                                  torch.full_like(vV, -1e30)).amax(dim=-1)]
+            if self.beams:
+                vfeats += [minkowski_inner(V, self.beam_p4[0].expand_as(V)),
+                           minkowski_inner(V, self.beam_p4[1].expand_as(V))]
+            extra.append(torch.asinh(torch.stack(vfeats, dim=-1)))
         return self.mlp(torch.cat(
             [per_ch, cross] + pooled
             + [_minkowski_stats(p4, mask) if self.mass_input

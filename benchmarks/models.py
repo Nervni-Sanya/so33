@@ -531,7 +531,8 @@ def _build_deepsets(
             # a sweep can pass one kwargs dict across the whole family.
             for k in ("rounds", "scalar_dim", "msg_dim", "channel_mixing",
                       "neighbors", "beams", "beam_energy", "dropout",
-                      "mass_input", "self_edges", "relnorm_edge", "falpha"):
+                      "mass_input", "self_edges", "relnorm_edge", "falpha",
+                      "vector_channel"):
                 extra.pop(k, None)
         if name == "so3c_invariant_set":
             extra.pop("channels", None)      # no channel axis in the no-flow model

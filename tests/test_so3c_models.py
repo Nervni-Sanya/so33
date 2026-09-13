@@ -589,6 +589,97 @@ def test_message_set_falpha_learns() -> None:
     print(f"  ✓ f_alpha gradient {g.abs().sum().item():.2e}")
 
 
+def test_message_set_vector_channel_is_exactly_covariant() -> None:
+    """The vector channel keeps exact covariance, with and without beams.
+
+    v_a starts as p_a, edge invariants are Minkowski products, the update is an
+    invariant-weighted linear combination of 4-vectors, and the readout pools
+    Minkowski products. Moving the jet -- and the beams, when present -- by one
+    Lorentz matrix must leave the logits unchanged. Every head is excited,
+    including the zero-initialised vector heads, so the check cannot pass on an
+    identity update.
+    """
+    from benchmarks.models import build_model
+    from so3c.lift import random_lorentz_pair
+
+    gen = torch.Generator().manual_seed(61)
+    x = _random_jets(6, 12, gen)
+    L, _ = random_lorentz_pair(rot_scale=1.0, boost_scale=1.0, generator=gen)
+    x_t = torch.cat([x[..., :4] @ L.T, x[..., 4:]], dim=-1)
+
+    for beams in (False, True):
+        torch.manual_seed(13)
+        m = build_model("so3c_message_set", in_features=4, out_features=2,
+                        representation="constituents",
+                        so3c_kwargs={"vector_channel": True, "beams": beams}).eval()
+        torch.manual_seed(13)
+        still = build_model("so3c_message_set", in_features=4, out_features=2,
+                            representation="constituents",
+                            so3c_kwargs={"vector_channel": True, "beams": beams}).eval()
+        with torch.no_grad():
+            for r in range(m.rounds):
+                m.w_head[r].weight.normal_(0, 0.5, generator=gen)
+                m.w_head[r].bias.normal_(0, 0.5, generator=gen)
+                m.mix[r].normal_(0, 0.3, generator=gen)
+                m.v_head[r].weight.normal_(0, 0.5, generator=gen)
+                m.v_head[r].bias.normal_(0, 0.5, generator=gen)
+            still.load_state_dict({k: v for k, v in m.state_dict().items()
+                                   if not k.startswith("v_head")}, strict=False)
+            base = m(x)
+            vector_moved = (base - still(x)).abs().max().item()
+            if beams:
+                beams0 = m.beam_p4.clone()
+                m.beam_p4.copy_(beams0 @ L.T)
+            err = (m(x_t) - base).abs().max().item()
+            if beams:
+                m.beam_p4.copy_(beams0)
+        assert vector_moved > 1e-4, (
+            f"the vector update changed nothing (beams={beams}): {vector_moved:.2e}")
+        assert err < 1e-6, f"vector channel (beams={beams}) lost covariance: {err:.2e}"
+        print(f"  ✓ vector channel, beams={beams}: covariant ({err:.1e}), "
+              f"update moves logits by {vector_moved:.1e}")
+
+
+def test_message_set_vector_channel_trains() -> None:
+    """Parameters and gradients: the defaults are untouched and v_head learns.
+
+    With the switch off the model has no vector heads and its parameter count
+    is the published one. With it on, a backward pass reaches every vector head
+    once the zero-init head of each round is nudged off zero -- otherwise the
+    first backward could legitimately leave later heads at zero gradient.
+    """
+    from benchmarks.models import build_model
+
+    off = build_model("so3c_message_set", in_features=4, out_features=2,
+                      representation="constituents",
+                      so3c_kwargs={"beams": True, "channels": 8})
+    assert sum(q.numel() for q in off.parameters()) == 22834
+    assert len(off.v_head) == 0
+
+    gen = torch.Generator().manual_seed(62)
+    x = _random_jets(4, 10, gen)
+    torch.manual_seed(14)
+    m = build_model("so3c_message_set", in_features=4, out_features=2,
+                    representation="constituents",
+                    so3c_kwargs={"beams": True, "channels": 8,
+                                 "vector_channel": True})
+    extra = sum(q.numel() for q in m.parameters()) - 22834
+    with torch.no_grad():
+        for r in range(m.rounds):
+            m.v_head[r].weight.normal_(0, 0.1, generator=gen)
+    m(x).sum().backward()
+    for r in range(m.rounds):
+        g = m.v_head[r].weight.grad
+        assert g is not None and torch.isfinite(g).all() and g.abs().sum() > 0, r
+    print(f"  ✓ vector channel adds {extra} parameters; every vector head learns")
+
+    import pytest
+    with pytest.raises(ValueError):
+        build_model("so3c_message_set", in_features=4, out_features=2,
+                    representation="constituents",
+                    so3c_kwargs={"vector_channel": True, "neighbors": 4})
+
+
 if __name__ == "__main__":
     print("\n── so3c benchmark-model tests ──")
     test_generator_invariants()
@@ -606,4 +697,6 @@ if __name__ == "__main__":
     test_message_set_bundle_defaults_are_unchanged()
     test_message_set_bundle_is_exactly_covariant()
     test_message_set_falpha_learns()
+    test_message_set_vector_channel_is_exactly_covariant()
+    test_message_set_vector_channel_trains()
     print("All so3c model tests passed.\n")
