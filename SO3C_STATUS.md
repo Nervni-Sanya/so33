@@ -61,6 +61,7 @@ Last updated 2026-09-13. This is the single place to start from. Commit hashes p
 | Regularisation | dropout 0.05 + wd 1e-4: −0.0011 AUC, −133 rejection. The model **underfits** | `c325950` |
 | Capacity **with** beams | channels 8: +0.0004 AUC, +67 rejection; **channels 16: worse than 8** (0.98111 / 811) at 1.5× cost | `c325950`, `90f2ead` |
 | K=128 wall clock | dense 602 s/epoch on 100k jets (60.8 h full protocol); kNN(16) 191 s (19.3 h), 3.15× faster | `90f2ead` |
+| Time-axis reference particle (1,0,0,0), gap-analysis finding 23 | redundant with beams: b+ + b- = 2 (1,0,0,0), so <p, t> = (<p,b+> + <p,b->)/2 is already available from inputs the model has. Closed by argument, not run | 2026-09-13 |
 | Two-seed ensemble | +0.0004 AUC; member scores correlate at 0.994 | `49e0c61`, `b72437f` |
 | Epochs 25–30 vs 24 (session cap) | +0.00022 AUC | `b72437f` |
 
@@ -90,9 +91,9 @@ Both are now switchable and default to the old behaviour: `--no-mass-input --no-
 | Relative-norm edge feature d_ab = s_aa + s_bb − 2 s_ab | LorentzNet Eq 3.2 feeds ‖x_i − x_j‖²; not recoverable after asinh | implemented, `--relnorm-edge` (`6771158`); CPU cost 1.30x the headline |
 | f_α multi-resolution embedding, learnable exponents | PELICAN Sec 3.1: ((1+x)^(α²) − 1)/α², α initialised over [0.05, 0.5] | implemented, `--falpha n` (`6771158`). **Not** zero-runtime as the agent claimed: at n=3 on beams + channels 8, K=64, CPU cost is **3.54x the headline** (~37.5 h per 30-epoch seed). CPU ratios misled before (kNN), so measure on GPU before any full run |
 | N^α / N̄^α aggregation rescaling | sum-vs-mean semantics; our flow angle scales with Σ_b w_b z_b | ~0 runtime |
-| Time-axis reference particle (1,0,0,0) | a third symmetry-breaking reference, as in L-GATr | 1.03× cost |
+| Time-axis reference particle (1,0,0,0) | a third symmetry-breaking reference, as in L-GATr -- **redundant with beams** (b+ + b- = 2t; see Closed) | 1.03× cost |
 | Softmax attention over w_b | normalised aggregation; needed for depth | ~1.05× |
-| Depth over width | ~10 blocks with fewer channels at small budgets (slim L-GATr) | our rounds 6 was −0.0006, but **without** beams |
+| Depth over width (rounds 6 re-asked with beams in the gap screen) | ~10 blocks with fewer channels at small budgets (slim L-GATr) | our rounds 6 was −0.0006, but **without** beams |
 | Best-validation checkpoint | LorentzNet reports the best-val checkpoint | protocol match; +0.0002–0.0005 claimed |
 | Lion optimiser, lr 3e-4, wd 0.2 | a different optimiser, not the ruled-out AdamW bundle | a training-limit control |
 | JetClass pretraining | the only published result above PELICAN (L-GATr 2894, arXiv:2411.00446) | ≥ 25 GPU-h truncated; changes the comparison class |
@@ -101,7 +102,7 @@ Full agent text: `so3c_notes/gap_to_sota_2026-09-13.md`. Three of the workflow's
 
 ## Next GPU window (opens 2026-09-19)
 
-`notebooks/kaggle_gap_screen.ipynb` (kernel `nsanya/so3c-gap-screen`) is built and verified but **not pushed**: the current window is spent. It screens every implemented candidate on the K=32 probe protocol (400k train jets, 20 epochs, seed 0) against beams + channels 8 (0.98128 / 834.4, `c325950`): the two defect fixes, the vector channel, the relative-norm edge, the pair latent, the three architectural changes combined, and f_alpha last because of its CPU cost. A one-epoch smoke run with every switch at once must write a result before any row starts. Estimated ~8.5 GPU-h.
+`notebooks/kaggle_gap_screen.ipynb` (kernel `nsanya/so3c-gap-screen`) is built and verified but **not pushed**: the current window is spent. It screens every implemented candidate on the K=32 probe protocol (400k train jets, 20 epochs, seed 0) against beams + channels 8 (0.98128 / 834.4, `c325950`): the two defect fixes, the vector channel, the relative-norm edge, the pair latent, the three architectural changes combined, depth re-asked with beams (rounds 6), and f_alpha last because of its CPU cost. A one-epoch smoke run with every switch at once must write a result before any row starts. Estimated ~10 GPU-h.
 
 Before it was committed: the config lines were parsed and checked (six rows in order, base configuration, protocol, every switch in the smoke run), and the embedded code bundle was decoded into an empty directory, where it shipped the tests and the provenance fix and built and ran the all-switches model.
 

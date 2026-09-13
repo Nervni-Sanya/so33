@@ -1435,6 +1435,9 @@ def build_gap_screen(blob: str) -> None:
                pair state is the likeliest carrier of its 20x parameter
                efficiency over this model.
       combo    vector + pair8 + fixes.
+      rounds6  --rounds 6. Depth was flat WITHOUT beams (-0.0006), but so was
+               capacity, which paid once beams supplied the information, so
+               depth is re-asked with beams. ~2x the per-round cost.
       falpha3  --falpha 3: CPU cost 3.54x, so it runs last and a session cut
                costs it rather than the cheaper rows.
 
@@ -1463,6 +1466,7 @@ def build_gap_screen(blob: str) -> None:
         ("pair8", ["--epochs", "20", "--pair-latent", "8"]),
         ("combo", ["--epochs", "20", "--vector-channel", "--pair-latent", "8",
                    "--no-mass-input", "--no-self-edges"]),
+        ("rounds6", ["--epochs", "20", "--rounds", "6"]),
         ("falpha3", ["--epochs", "20", "--falpha", "3"]),
     ]
     smoke_flags = ["--vector-channel", "--pair-latent", "8", "--no-mass-input",
