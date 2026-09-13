@@ -138,6 +138,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="so3c_message_set: carry a covariant 4-vector per node "
                         "beside the bivector, which discards each constituent's "
                         "component along the jet axis.")
+    p.add_argument("--pair-latent", type=int, default=None,
+                   help="so3c_message_set: channels of a rank-2 pair state "
+                        "carried through the rounds with 7 of PELICAN's 15 "
+                        "equivariant aggregators (0 = off).")
     p.add_argument("--ckpt-dir", type=str, default=None,
                    help="Directory for training checkpoints; --resume needs it.")
     p.add_argument("--resume", action="store_true",
@@ -201,6 +205,7 @@ def main(argv: list[str] | None = None) -> int:
         ("relnorm_edge", True if args.relnorm_edge else None),
         ("falpha", args.falpha),
         ("vector_channel", True if args.vector_channel else None),
+        ("pair_latent", args.pair_latent),
     ) if v is not None} or None
 
     kwargs = dict(

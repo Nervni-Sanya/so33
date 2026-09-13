@@ -680,6 +680,125 @@ def test_message_set_vector_channel_trains() -> None:
                     so3c_kwargs={"vector_channel": True, "neighbors": 4})
 
 
+def test_message_set_eq2to2_is_permutation_equivariant() -> None:
+    """Each of the 7 rank-2 maps commutes with relabelling the particles.
+
+    Permuting rows and columns of the input by the same permutation must
+    permute the output the same way. An indexing slip -- a row mean placed
+    along the wrong axis, a diagonal broadcast the wrong way -- still gives a
+    tensor of the right shape, and only this check catches it.
+    """
+    from benchmarks.so3c_models import SO3CMessageSetClassifier
+
+    gen = torch.Generator().manual_seed(71)
+    B, K, C = 3, 7, 4
+    T = torch.randn(B, K, K, C, dtype=torch.float64, generator=gen)
+    m = torch.ones(B, K, dtype=torch.float64)
+    m[0, 5:] = 0.0
+    m[2, 3:] = 0.0
+    M = m.unsqueeze(-1) * m.unsqueeze(-2)
+    out = SO3CMessageSetClassifier._eq2to2(T, M)
+    assert out.shape == (B, K, K, 7 * C)
+
+    perm = torch.randperm(K, generator=gen)
+    Tp = T[:, perm][:, :, perm]
+    Mp = M[:, perm][:, :, perm]
+    outp = SO3CMessageSetClassifier._eq2to2(Tp, Mp)
+    err = (outp - out[:, perm][:, :, perm]).abs().max().item()
+    assert err < 1e-12, f"Eq2to2 is not permutation-equivariant: {err:.2e}"
+
+    row = out[..., 2 * C:3 * C]
+    col = out[..., 3 * C:4 * C]
+    assert torch.allclose(row[..., 0, :], row[..., 1, :]), "row mean must not vary along b"
+    assert torch.allclose(col[:, 0], col[:, 1]), "column mean must not vary along a"
+    print(f"  ✓ Eq2to2 permutation-equivariant ({err:.1e}); row/column maps on the right axes")
+
+
+def test_message_set_pair_latent_symmetries() -> None:
+    """With the pair latent on: exactly Lorentz covariant, permutation invariant.
+
+    The pair state is built from invariants and from the invariant edge hidden
+    state, so moving the jet (and the beams, when present) by one Lorentz
+    matrix leaves the logits unchanged. Relabelling the real constituents must
+    also leave them unchanged. Every head is excited, and a model differing only
+    in its pair-mixing weights must give different logits, so neither check can
+    pass on an inert pair stream.
+    """
+    from benchmarks.models import build_model
+    from so3c.lift import random_lorentz_pair
+
+    gen = torch.Generator().manual_seed(72)
+    x = _random_jets(6, 12, gen)
+    L, _ = random_lorentz_pair(rot_scale=1.0, boost_scale=1.0, generator=gen)
+    x_t = torch.cat([x[..., :4] @ L.T, x[..., 4:]], dim=-1)
+    n_min = int(x[..., 4].sum(dim=-1).min().item())
+    perm = torch.cat([torch.randperm(n_min, generator=gen),
+                      torch.arange(n_min, x.shape[1])])
+    x_p = x[:, perm]
+
+    for beams in (False, True):
+        kw = {"pair_latent": 6, "beams": beams}
+        torch.manual_seed(15)
+        m = build_model("so3c_message_set", in_features=4, out_features=2,
+                        representation="constituents", so3c_kwargs=kw).eval()
+        with torch.no_grad():
+            for r in range(m.rounds):
+                m.w_head[r].weight.normal_(0, 0.5, generator=gen)
+                m.w_head[r].bias.normal_(0, 0.5, generator=gen)
+                m.mix[r].normal_(0, 0.3, generator=gen)
+            base = m(x)
+            perm_err = (m(x_p) - base).abs().max().item()
+            if beams:
+                beams0 = m.beam_p4.clone()
+                m.beam_p4.copy_(beams0 @ L.T)
+            lorentz_err = (m(x_t) - base).abs().max().item()
+            if beams:
+                m.beam_p4.copy_(beams0)
+            other = build_model("so3c_message_set", in_features=4, out_features=2,
+                                representation="constituents", so3c_kwargs=kw).eval()
+            other.load_state_dict({k: v for k, v in m.state_dict().items()
+                                   if not k.startswith("pair_mix")}, strict=False)
+            for r in range(other.rounds):
+                other.pair_mix[r][0].weight.normal_(0, 0.5, generator=gen)
+            pair_moved = (other(x) - base).abs().max().item()
+        assert lorentz_err < 1e-6, f"pair latent (beams={beams}) lost covariance: {lorentz_err:.2e}"
+        assert perm_err < 1e-9, f"pair latent (beams={beams}) not permutation invariant: {perm_err:.2e}"
+        assert pair_moved > 1e-4, f"pair-mixing weights change nothing (beams={beams}): {pair_moved:.2e}"
+        print(f"  ✓ pair latent, beams={beams}: Lorentz {lorentz_err:.1e}, "
+              f"permutation {perm_err:.1e}, pair stream moves logits {pair_moved:.1e}")
+
+
+def test_message_set_pair_latent_trains() -> None:
+    """Off: the published model is untouched. On: every pair-mixing layer learns."""
+    from benchmarks.models import build_model
+
+    off = build_model("so3c_message_set", in_features=4, out_features=2,
+                      representation="constituents",
+                      so3c_kwargs={"beams": True, "channels": 8})
+    assert sum(q.numel() for q in off.parameters()) == 22834
+    assert off.pair_init is None and len(off.pair_mix) == 0
+
+    gen = torch.Generator().manual_seed(73)
+    x = _random_jets(4, 10, gen)
+    torch.manual_seed(16)
+    m = build_model("so3c_message_set", in_features=4, out_features=2,
+                    representation="constituents",
+                    so3c_kwargs={"beams": True, "channels": 8, "pair_latent": 8})
+    added = sum(q.numel() for q in m.parameters()) - 22834
+    m(x).sum().backward()
+    for name, mod in [("pair_init", m.pair_init)] + [
+            ("pair_mix[%d]" % r, m.pair_mix[r][0]) for r in range(m.rounds)]:
+        g = mod.weight.grad
+        assert g is not None and torch.isfinite(g).all() and g.abs().sum() > 0, name
+    print(f"  ✓ pair latent adds {added} parameters; init and every mixing layer learn")
+
+    import pytest
+    with pytest.raises(ValueError):
+        build_model("so3c_message_set", in_features=4, out_features=2,
+                    representation="constituents",
+                    so3c_kwargs={"pair_latent": 4, "neighbors": 4})
+
+
 if __name__ == "__main__":
     print("\n── so3c benchmark-model tests ──")
     test_generator_invariants()
@@ -699,4 +818,7 @@ if __name__ == "__main__":
     test_message_set_falpha_learns()
     test_message_set_vector_channel_is_exactly_covariant()
     test_message_set_vector_channel_trains()
+    test_message_set_eq2to2_is_permutation_equivariant()
+    test_message_set_pair_latent_symmetries()
+    test_message_set_pair_latent_trains()
     print("All so3c model tests passed.\n")

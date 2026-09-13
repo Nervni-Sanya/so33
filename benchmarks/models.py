@@ -532,7 +532,7 @@ def _build_deepsets(
             for k in ("rounds", "scalar_dim", "msg_dim", "channel_mixing",
                       "neighbors", "beams", "beam_energy", "dropout",
                       "mass_input", "self_edges", "relnorm_edge", "falpha",
-                      "vector_channel"):
+                      "vector_channel", "pair_latent"):
                 extra.pop(k, None)
         if name == "so3c_invariant_set":
             extra.pop("channels", None)      # no channel axis in the no-flow model

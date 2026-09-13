@@ -597,6 +597,15 @@ class SO3CMessageSetClassifier(nn.Module):
     head, and pooled vector invariants in the readout. Every weight is a
     function of invariants and every update an invariant-weighted linear
     combination of 4-vectors, so covariance is exact. Dense graph only.
+
+    Pair latent. ``pair_latent=C_p`` carries a real pair state E_ab through the
+    rounds, as PELICAN does, instead of reducing pairs to nodes every round.
+    Each round E feeds the edge MLP and is updated residually from a reduced
+    set of 7 of PELICAN's 15 rank-2 equivariant maps (identity, transpose, row
+    and column means, the diagonal broadcast both ways, global mean) together
+    with that round's edge hidden state; the readout pools E over real pairs
+    and over its diagonal. E is built from invariants only, so covariance is
+    exact, and every map is permutation-equivariant. Dense graph only.
     """
 
     def __init__(
@@ -619,6 +628,7 @@ class SO3CMessageSetClassifier(nn.Module):
         relnorm_edge: bool = False,
         falpha: int = 0,
         vector_channel: bool = False,
+        pair_latent: int = 0,
         dtype: torch.dtype = torch.float64,
     ) -> None:
         super().__init__()
@@ -634,6 +644,9 @@ class SO3CMessageSetClassifier(nn.Module):
         self.relnorm_edge = relnorm_edge
         self.falpha = falpha
         self.vector_channel = vector_channel
+        self.pair_latent = pair_latent
+        if pair_latent and neighbors is not None:
+            raise ValueError("the pair latent is implemented for the dense graph only")
         if vector_channel and neighbors is not None:
             raise ValueError("the vector channel is implemented for the dense graph only")
         if beams and neighbors is not None:
@@ -673,7 +686,7 @@ class SO3CMessageSetClassifier(nn.Module):
         self.v_head = nn.ModuleList()
         for _ in range(rounds):
             self.edge.append(nn.Sequential(
-                nn.Linear(edge_in, act_hidden), nn.Tanh()).to(dtype))
+                nn.Linear(edge_in + pair_latent, act_hidden), nn.Tanh()).to(dtype))
             head = nn.Linear(act_hidden, channels).to(dtype)
             nn.init.zeros_(head.weight)      # identity flow at init
             nn.init.zeros_(head.bias)
@@ -689,6 +702,16 @@ class SO3CMessageSetClassifier(nn.Module):
                     nn.Linear(scalar_dim + msg_dim, act_hidden), nn.ReLU(),
                     nn.Linear(act_hidden, scalar_dim)).to(dtype))
 
+        if pair_latent:
+            self.pair_init = nn.Linear(edge_in, pair_latent).to(dtype)
+            self.pair_mix = nn.ModuleList([
+                nn.Sequential(nn.Linear(7 * pair_latent + act_hidden, pair_latent),
+                              nn.Tanh()).to(dtype)
+                for _ in range(rounds)])
+        else:
+            self.pair_init = None
+            self.pair_mix = nn.ModuleList()
+
         if channel_mixing:
             mix = torch.zeros(rounds, channels, channels, 2, dtype=dtype)
             mix[..., 0] = torch.eye(channels, dtype=dtype)       # identity init
@@ -700,7 +723,8 @@ class SO3CMessageSetClassifier(nn.Module):
         in_features = (channels * 11 + 2 * n_ch_pairs + 2 * scalar_dim
                        + (7 if mass_input else 4)
                        + ((2 * scalar_dim + 2) if beams else 0)
-                       + ((4 + (2 if beams else 0)) if vector_channel else 0))
+                       + ((4 + (2 if beams else 0)) if vector_channel else 0)
+                       + 2 * pair_latent)
         layers = [nn.Linear(in_features, hidden), nn.ReLU()]
         if dropout > 0:
             layers.append(nn.Dropout(dropout))
@@ -712,6 +736,32 @@ class SO3CMessageSetClassifier(nn.Module):
         iu = torch.triu_indices(channels, channels)
         self.register_buffer("pair_rows", iu[0])
         self.register_buffer("pair_cols", iu[1])
+
+    @staticmethod
+    def _eq2to2(T: torch.Tensor, M: torch.Tensor) -> torch.Tensor:
+        """7 of the 15 permutation-equivariant maps from rank-2 to rank-2.
+
+        T (B, K, K, C) with pair mask M (B, K, K) -> (B, K, K, 7C): identity,
+        transpose, row mean (over b, placed at every b), column mean (over a,
+        placed at every a), the diagonal broadcast along rows and along
+        columns, and the global mean.
+        """
+        B, K, _, C = T.shape
+        Mm = M.unsqueeze(-1)
+        Tm = T * Mm
+        row = Tm.sum(dim=2) / Mm.sum(dim=2).clamp_min(1.0)          # (B, K, C) by a
+        col = Tm.sum(dim=1) / Mm.sum(dim=1).clamp_min(1.0)          # (B, K, C) by b
+        diag = torch.diagonal(T, dim1=1, dim2=2).permute(0, 2, 1)    # (B, K, C)
+        tot = Tm.sum(dim=(1, 2)) / Mm.sum(dim=(1, 2)).clamp_min(1.0)  # (B, C)
+        out = [
+            T, T.transpose(1, 2),
+            row.unsqueeze(2).expand(B, K, K, C),
+            col.unsqueeze(1).expand(B, K, K, C),
+            diag.unsqueeze(2).expand(B, K, K, C),
+            diag.unsqueeze(1).expand(B, K, K, C),
+            tot[:, None, None, :].expand(B, K, K, C),
+        ]
+        return torch.cat(out, dim=-1) * Mm
 
     @staticmethod
     def _invariant_scale(v: torch.Tensor) -> torch.Tensor:
@@ -787,6 +837,7 @@ class SO3CMessageSetClassifier(nn.Module):
             denom = edge_mask.sum(-1).clamp_min(1.0)             # (B, K)
         else:
             pair_mask = mask_all.unsqueeze(-1) * mask_all.unsqueeze(-2)
+            full_pair = pair_mask.clone()          # keeps the diagonal for the pair latent
             if self.self_edges:
                 denom = mask_all.sum(dim=-1).clamp_min(1.0).unsqueeze(-1).expand(B, K)
             else:
@@ -844,7 +895,12 @@ class SO3CMessageSetClassifier(nn.Module):
                 torch.asinh(col.real), torch.asinh(col.imag),
             ] + scal + vfeat, dim=-1)                                    # (B,K,*,6C+2D)
 
-            hid = self.edge[r](e)
+            if self.pair_latent:
+                if r == 0:
+                    E = self.pair_init(e) * full_pair.unsqueeze(-1)
+                hid = self.edge[r](torch.cat([e, E], dim=-1))
+            else:
+                hid = self.edge[r](e)
             wts = self.w_head[r](hid) * emask                    # (B, K, *, C)
             if self.vector_channel:
                 u = self.v_head[r](hid).squeeze(-1) * pair_mask   # (B, K, K)
@@ -872,6 +928,11 @@ class SO3CMessageSetClassifier(nn.Module):
             Q = expm_so3c(a.reshape(-1, 3), t=-self.T)           # (B*C*K, 3, 3)
             zc = (Q @ zc.reshape(-1, 3, 1)).squeeze(-1).reshape(B, C, K, 3)
             zc = zc * mask_all[:, None, :, None]
+
+            if self.pair_latent:
+                agg = self._eq2to2(E, full_pair)
+                E = (E + self.pair_mix[r](torch.cat([agg, hid], dim=-1))) \
+                    * full_pair.unsqueeze(-1)
 
             if self.mix is not None:
                 M = torch.complex(self.mix[r, ..., 0], self.mix[r, ..., 1])
@@ -918,6 +979,13 @@ class SO3CMessageSetClassifier(nn.Module):
                 vfeats += [minkowski_inner(V, self.beam_p4[0].expand_as(V)),
                            minkowski_inner(V, self.beam_p4[1].expand_as(V))]
             extra.append(torch.asinh(torch.stack(vfeats, dim=-1)))
+        if self.pair_latent:
+            Er = E[:, :K_real, :K_real]
+            pm = (mask.unsqueeze(-1) * mask.unsqueeze(-2)).unsqueeze(-1)
+            diag = torch.diagonal(Er, dim1=1, dim2=2).permute(0, 2, 1)   # (B, K, C_p)
+            n_r = mask.sum(dim=-1).clamp_min(1.0).unsqueeze(-1)
+            extra += [(Er * pm).sum(dim=(1, 2)) / pm.sum(dim=(1, 2)).clamp_min(1.0),
+                      (diag * mask.unsqueeze(-1)).sum(dim=1) / n_r]
         return self.mlp(torch.cat(
             [per_ch, cross] + pooled
             + [_minkowski_stats(p4, mask) if self.mass_input
