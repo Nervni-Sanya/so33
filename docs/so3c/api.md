@@ -3,7 +3,8 @@
 `import so3c` exposes the algebra functions, `HermitianMetric`,
 `SO3CActivation` and `SO3CInteraction`. The lift lives in `so3c.lift` and is
 not re-exported. Classifiers are in `benchmarks.so3c_models`; the harness is
-`benchmarks.models`, `benchmarks.tabular_runner` and `benchmarks.train`.
+`benchmarks.models`, `benchmarks.tabular_runner`, `benchmarks.train` and
+`benchmarks.ensemble_scores`.
 
 Shapes use `…` for leading batch dimensions. Real tensors default to
 `torch.float64`; the complex dtype follows the real one (`float64 → complex128`,
@@ -124,7 +125,9 @@ SO3CEquivariantSetClassifier(out_features=2, channels=4, hidden=64, act_hidden=1
 SO3CCovariantSetClassifier(out_features=2, channels=4, hidden=64, act_hidden=16, T=1.0, dtype=float64)
 SO3CMessageSetClassifier(out_features=2, channels=4, rounds=3, hidden=64, act_hidden=16,
                          scalar_dim=8, msg_dim=8, T=1.0, channel_mixing=True,
-                         neighbors=None, dtype=float64)
+                         neighbors=None, beams=False, beam_energy=1.0, dropout=0.0,
+                         mass_input=True, self_edges=True, relnorm_edge=False,
+                         falpha=0, vector_channel=False, pair_latent=0, dtype=float64)
 SO3CInteractionSetClassifier(out_features=2, hidden=64, interaction_hidden=16, T=1.0,
                              rtol=1e-5, atol=1e-7, dtype=float64)
 SO3CBottleneck(in_features, out_features, mode="dynamic", T=1.0, hidden_metric=16,
@@ -136,6 +139,11 @@ EtaOnlyClassifier(out_features=2, hidden=32, dtype=float64)
 SO3CFlowClassifier(out_features=2, channels=4, hidden=32, act_hidden=16, T=1.0, dtype=float64)
 ```
 
+With `beams=True`, `SO3CMessageSetClassifier` holds the beams in a buffer
+`beam_p4` of shape `(2, 4)`, rows $E_b(1,0,0,+1)$ and $E_b(1,0,0,-1)$.
+Transforming it in place (`model.beam_p4.copy_(...)`) is how the tests and
+`run_boost_robustness` move the beams together with the jet. `beams`,
+`vector_channel` or `pair_latent` combined with `neighbors` raise `ValueError`.
 `N_POOLED_FULL = 11` and `N_POOLED_SIMPLE = 5` are the pooled-feature counts.
 
 ## Harness entry points
@@ -143,34 +151,51 @@ SO3CFlowClassifier(out_features=2, channels=4, hidden=32, act_hidden=16, T=1.0, 
 **`benchmarks.models.build_model(name, in_features, out_features, *, T=0.3, natural_hidden=256, dtype=float64, adjoint=True, so33_method="rk4", so33_step_size=None, representation="flat", bound_input=None, max_input_norm=8.0, pool="mean", so3c_kwargs=None)`**
 
 - Set models need `representation="constituents"` and `in_features=4`.
-  `so3c_kwargs` is passed to their constructors after filtering:
-  `rounds`, `scalar_dim`, `msg_dim`, `channel_mixing` and `neighbors` are
-  dropped for every model except `so3c_message_set`; `channels`, `act_hidden`
-  and `T` are also dropped for `so3c_invariant_set`; `channels` and
-  `act_hidden` for `so3c_interaction_set`.
+  `so3c_kwargs` is passed to their constructors after filtering: the
+  message-passing arguments `rounds`, `scalar_dim`, `msg_dim`,
+  `channel_mixing`, `neighbors`, `beams`, `beam_energy`, `dropout`,
+  `mass_input`, `self_edges`, `relnorm_edge`, `falpha`, `vector_channel` and
+  `pair_latent` are dropped for every model except `so3c_message_set`;
+  `channels`, `act_hidden` and `T` are also dropped for `so3c_invariant_set`,
+  and `channels` and `act_hidden` for `so3c_interaction_set`.
 - `so3c` and `so3c_static` need `representation="flat"` and receive
   `so3c_kwargs`; `so3c_multi` does not.
 - `benchmarks.models.count_parameters(model)` counts trainable parameters.
 
-**`benchmarks.tabular_runner.run_tabular_experiment(experiment, split, *, models=None, seed=0, epochs=30, batch_size=128, lr=3e-3, weight_decay=0.0, natural_hidden=256, T=0.3, representation="flat", pool="mean", results_dir="results", device="cpu", dtype=float64, so3c_kwargs=None, eval_chunk_size=4096, ckpt_dir=None, resume=False, max_seconds=None)`**
+**`benchmarks.tabular_runner.run_tabular_experiment(experiment, split, *, models=None, seed=0, epochs=30, batch_size=128, lr=3e-3, weight_decay=0.0, optimizer="adam", schedule="cosine", warmup_epochs=4, natural_hidden=256, T=0.3, representation="flat", pool="mean", results_dir="results", device="cpu", dtype=float64, so3c_kwargs=None, eval_chunk_size=4096, ckpt_dir=None, resume=False, max_seconds=None)`**
 trains each model, evaluates it on the test split and writes
 `<results_dir>/<experiment>__<model>__seed<seed>.json` plus a
-`…__scores.npz` with per-example test scores. The global seed is set before
-each model is built, so identical commands reproduce each other.
-The file layout is described in
+`…__scores.npz` with per-example test scores. The record includes
+`so3c_kwargs` and `dtype`; result files written before 2026-09-13 lack both.
+The global seed is set before each model is built, so identical commands
+reproduce each other. The file layout is described in
 [experiments.md](experiments.md#5-output-files).
 
 **`benchmarks.train.TrainConfig`** fields and defaults: `epochs=30`,
 `batch_size=128`, `lr=3e-3`, `weight_decay=0.0`, `grad_clip=1.0`,
-`cosine_schedule=True`, `early_stop_patience=None`, `seed=0`, `device="cpu"`,
+`cosine_schedule=True`, `optimizer="adam"`, `schedule="cosine"`,
+`warmup_epochs=4`, `early_stop_patience=None`, `seed=0`, `device="cpu"`,
 `eval_chunk_size=4096`, `ckpt_path=None`, `ckpt_every=1`, `resume=False`,
-`max_seconds=None`. `train_classifier(model, X_train, y_train, X_val, y_val, cfg)`
-minimises cross-entropy plus `model.regularization_loss()` with Adam and a
-cosine schedule, clips gradients, validates every epoch and returns the final
-epoch's weights (there is no best-epoch restore). A checkpoint stores model,
-optimizer, scheduler and RNG state, so a resumed run continues exactly;
-`max_seconds` limits a single session. `forward_in_chunks(model, X, chunk_size)`
-bounds evaluation memory for the $K\times K$ pairwise readouts.
+`max_seconds=None`. `optimizer` is `"adam"` or `"adamw"`. `schedule="cosine"`
+anneals over the run; `schedule="lorentznet"` is the LorentzNet and PELICAN
+recipe, `lorentznet_lr_factor(epoch, total_epochs, warmup=4, t0=4, t_mult=2, decay_epochs=3, gamma=0.5)`:
+linear warm-up, cosine annealing with warm restarts (cycles of 4, 8 and 16
+epochs in a 35-epoch run) and a final decay by 0.5 per epoch.
+`cosine_schedule=False` turns scheduling off.
+`train_classifier(model, X_train, y_train, X_val, y_val, cfg)` minimises
+cross-entropy plus `model.regularization_loss()`, clips gradients, validates
+every epoch and returns the final epoch's weights (there is no best-epoch
+restore). A checkpoint stores model, optimizer, scheduler and RNG state, so a
+resumed run continues exactly; `max_seconds` limits a single session.
+`forward_in_chunks(model, X, chunk_size)` bounds evaluation memory for the
+$K\times K$ pairwise readouts.
+
+**`benchmarks.ensemble_scores`**, run as
+`python -m benchmarks.ensemble_scores --results-dir DIR [--model M] [--experiment E] [--tolerance T] [--out FILE]`,
+averages the saved class-1 probabilities over every seed of a model and prints
+the ensemble's AUC and background rejection. Before that it recomputes each
+member's metrics from its own scores and stops if they disagree with the stored
+values, or if the members' test labels differ.
 
 ## Examples
 
@@ -227,6 +252,45 @@ jets[:, :20, 4] = 1.0                         # 20 real constituents, 12 padding
 jets[:, 20:, :4] = 0.0
 logits = model(jets)                          # (2, 2)
 print(logits.shape)
+```
+
+**Beams: covariant together with the beams, not without them.**
+
+```python
+import math
+import torch
+from benchmarks.models import build_model
+from so3c.lift import random_lorentz_pair
+
+torch.manual_seed(0)
+model = build_model("so3c_message_set", in_features=4, out_features=2,
+                    representation="constituents",
+                    so3c_kwargs={"beams": True, "channels": 8})
+with torch.no_grad():                         # zero-initialised heads make the flow the identity
+    for head in model.w_head:
+        head.weight.normal_(0, 0.5)
+        head.bias.normal_(0, 0.5)
+
+p = torch.randn(6, 12, 3, dtype=torch.float64)
+jets = torch.cat([p.norm(dim=-1, keepdim=True), p,
+                  torch.ones(6, 12, 1, dtype=torch.float64)], dim=-1)
+
+def transform(L, x):                          # act on the 4-momenta, keep the mask
+    return torch.cat([x[..., :4] @ L.T, x[..., 4:]], dim=-1)
+
+L, _ = random_lorentz_pair(boost_scale=0.5)
+c, s = math.cos(1.1), math.sin(1.1)
+Rz = torch.eye(4, dtype=torch.float64)        # rotation about the beam (z) axis
+Rz[1, 1], Rz[1, 2], Rz[2, 1], Rz[2, 2] = c, -s, s, c
+
+with torch.no_grad():
+    base = model(jets)
+    print((model(transform(L, jets)) - base).abs().max())    # clearly non-zero: the jet moved past fixed beams
+    print((model(transform(Rz, jets)) - base).abs().max())   # ~1e-16: rotation about the beam axis
+    beams = model.beam_p4.clone()
+    model.beam_p4.copy_(beams @ L.T)                          # move the beams with the jet
+    print((model(transform(L, jets)) - base).abs().max())    # ~1e-16: exactly covariant
+    model.beam_p4.copy_(beams)
 ```
 
 **The multi-particle ODE with padding.**

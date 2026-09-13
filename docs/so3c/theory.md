@@ -215,7 +215,7 @@ permutation-equivariant; padding produces $z=0$.
   lift is linear in its first argument; the jet-total invariant is zero.
 
 So parity-odd information does not survive the lift, and before any flow 6 of
-the 11 pooled readout features (§11) are identically zero. The models that
+the 11 pooled readout features (§13) are identically zero. The models that
 read the raw lift (`so3c_invariant_set`) use only the other 5; a flow that
 mixes particles makes the states non-simple and populates all 11.
 $\operatorname{Re}(z_a\cdot z_b)$ is a Lorentz-invariant polynomial in the
@@ -260,20 +260,112 @@ round. The key is an invariant, so the neighbour set is the same in every
 frame. A frame-dependent key (angular distance, $p_T$ order) would reshuffle
 edges under a boost and break equivariance with nothing to flag it.
 
-## 11. Readout features
+## 11. Beams: what symmetry survives
+
+`beams=True` (`--beams` on the command line) adds two beam 4-vectors,
+$b_\pm=E_b\,(1,0,0,\pm1)$, with $E_b$ = `beam_energy` $=1$ in the normalised
+units of the input. They are stored in the buffer `beam_p4` and join the set as
+two extra nodes, lifted against the same jet momentum as the constituents:
+$z_{b_\pm}=\operatorname{bivec}(b_\pm,P)$, where $P$ stays the sum over real
+constituents. The beam nodes send and receive messages and are flowed like any
+other node. Every node's scalar state is initialised with three more inputs,
+$\langle p,b_+\rangle=E_b(E-p_z)$, $\langle p,b_-\rangle=E_b(E+p_z)$ and a beam
+label. They give the network each constituent's lab-frame energy and
+longitudinal momentum, which no Lorentz invariant of the jet alone contains.
+The readout still pools real constituents only, and appends the two beam
+nodes' final scalar states and $\operatorname{asinh}\langle P,b_\pm\rangle$
+(§13). Beams need the dense graph: combining them with `neighbors` raises
+`ValueError`.
+
+Every feature is still an invariant of the whole set $\{p_a,b_+,b_-\}$ and every
+update is covariant, so the network is exactly Lorentz-covariant as a function
+of the jet **and** the beams: transforming both by the same $\Lambda$ leaves
+the logits unchanged. With the beams held at their lab values, the output is
+unchanged only under transformations that fix both beams. Such a transformation
+fixes $t=(b_++b_-)/2E_b=(1,0,0,0)$, so it is a rotation, and it fixes the beam
+axis $(b_+-b_-)/2E_b$, so it is a rotation about that axis. A boost along the
+beam axis is not one of them: it rescales $b_\pm$ by $e^{\pm\eta}$. LorentzNet
+and PELICAN also feed beam particles, and their outputs have the same residual
+symmetry.
+
+Measured in float64 on the headline configuration (`beams=True, channels=8`)
+with the weight heads set to random values, on six random jets:
+
+| Transformation of the jet | Beams | Largest absolute logit change |
+|---|---|---:|
+| random Lorentz transformation, boost scale 0.5 | transformed with the jet | $2.2\times10^{-16}$ |
+| rotation about the beam axis | fixed | $1.4\times10^{-16}$ |
+| rotation about a transverse axis | fixed | $2.2\times10^{-2}$ |
+| boost along the beam axis, rapidity 0.5 | fixed | $4.8\times10^{-3}$ |
+| random Lorentz transformation, boost scale 0.5 | fixed | $3.1\times10^{-2}$ |
+
+On real test jets a trained model keeps its AUC (0.9684) with the beams moved
+along up to boost scale 3, and loses 0.035 by scale 3 with them fixed
+([experiments.md, table E](experiments.md#e-boost-robustness)).
+
+## 12. Switches implemented but not yet trained
+
+Six arguments of `SO3CMessageSetClassifier` change what the model computes.
+Each defaults to the behaviour the results in [experiments.md](experiments.md)
+were measured with, and none has been trained on the full data yet. Each keeps
+exact covariance: it adds or recompresses invariants, or updates covariant
+vectors by invariant-weighted linear combinations.
+
+- **`mass_input=False`** drops $m^2=\langle p_a,p_a\rangle$ from the scalar
+  initialisation and the three $m^2$ moments from the Minkowski readout
+  statistics (§13). The constituents in this dataset are massless, so their
+  $m^2$ is floating-point rounding noise.
+- **`self_edges=False`** removes $a=b$ from the dense graph and averages
+  messages over the other nodes. The flow is unaffected ($z_a\times z_a=0$);
+  the scalar messages and the normalisation are not.
+- **`relnorm_edge=True`** adds $d_{ab}=s_{aa}+s_{bb}-2s_{ab}$, real and
+  imaginary parts per channel, to the edge features: the analogue of
+  LorentzNet's $\lVert x_i-x_j\rVert^2$, which cannot be recovered once
+  $s_{aa}$, $s_{bb}$ and $s_{ab}$ have been compressed separately.
+- **`falpha=n`** compresses the pair invariants with $n$ learnable signed
+  functions $f_\alpha(x)=\operatorname{sign}(x)\,\big((1+\lvert x\rvert)^{\alpha^2}-1\big)/\alpha^2$
+  instead of asinh, with $\alpha$ initialised log-uniformly over $[0.05,0.5]$,
+  after the input embedding of PELICAN. The diagonal invariants keep asinh.
+- **`vector_channel=True`** carries a real 4-vector $v_a$ per node, initialised
+  to $p_a$ (beams included). The bivector lift is unchanged under
+  $p_a\mapsto p_a+\lambda P$, so it discards each constituent's component along
+  the jet axis; $v_a$ keeps it. Each round adds
+  $\operatorname{asinh}\langle v_a,v_b\rangle$ and
+  $\operatorname{asinh}\langle v_a-v_b,v_a-v_b\rangle$ to the edge features and
+  updates $v_a\leftarrow v_a+\frac1n\sum_b u_{ab}v_b$ with an invariant weight
+  $u_{ab}$ from a zero-initialised head. The readout adds $\langle V,V\rangle$,
+  the mean and the maximum of $\langle v_a,V\rangle$ and the mean of
+  $\langle v_a,v_a\rangle$, with $V=\sum_a v_a$ over real constituents, and
+  $\langle V,b_\pm\rangle$ when there are beams.
+- **`pair_latent=`$C_p$** carries a real pair state $E_{ab}\in\mathbb R^{C_p}$
+  through the rounds, as PELICAN does, instead of reducing pairs to nodes in
+  every round. It is initialised from the first round's edge features, feeds
+  every edge network, and is updated residually from 7 of PELICAN's 15
+  permutation-equivariant rank-2 maps (identity, transpose, row mean, column
+  mean, the diagonal broadcast along rows and along columns, global mean)
+  together with that round's edge hidden state. The readout adds the mean of
+  $E$ over real pairs and over its diagonal. $E$ is built from invariants only.
+
+`vector_channel` and `pair_latent` also need the dense graph.
+
+## 13. Readout features
 
 All set models end in a ReLU MLP `in → hidden → hidden → 2` on arcsinh-compressed
-invariants. With $n$ real particles and $n_\text{off}$ ordered off-diagonal real pairs:
+invariants (`so3c_message_set` can add dropout between the layers). With $n$
+real particles and $n_\text{off}$ ordered off-diagonal real pairs:
 
 | Group | Features | Count |
 |---|---|---|
 | Pooled bivector invariants (`simple=False`) | mean $\operatorname{Re}s_{aa}$, mean $\lvert\operatorname{Re}s_{aa}\rvert$, mean $\operatorname{Im}s_{aa}$, mean / mean square / max-abs of off-diagonal $\operatorname{Re}s_{ab}$ and of $\operatorname{Im}s_{ab}$, $\operatorname{Re}q_\text{tot}$, $\operatorname{Im}q_\text{tot}$ | 11 |
 | Pooled, raw lift (`simple=True`) | the five $\operatorname{Re}$ features above that are not identically zero | 5 |
-| Minkowski statistics | mean $m^2$, mean $m^4$, mean $\lvert m^2\rvert$, mean / mean square / max-abs of off-diagonal $\langle p_a,p_b\rangle$, $\langle P,P\rangle$ | 7 |
+| Minkowski statistics | mean $m^2$, mean $m^4$, mean $\lvert m^2\rvert$, mean / mean square / max-abs of off-diagonal $\langle p_a,p_b\rangle$, $\langle P,P\rangle$ | 7, or 4 with `mass_input=False` |
 | Cross-channel | $\operatorname{Re}$ and $\operatorname{Im}$ of $z^{(c)}_\text{tot}\cdot z^{(d)}_\text{tot}$ for $c\le d$, $z^{(c)}_\text{tot}=\sum_a z^{(c)}_a$ | $C(C+1)$ |
-| Scalar channel (`so3c_message_set`) | masked mean and max of $h$ | $2D$ |
+| Scalar channel (`so3c_message_set`) | masked mean and max of $h$ over real constituents | $2D$ |
+| Beams | final scalar states of the two beam nodes; $\operatorname{asinh}\langle P,b_\pm\rangle$ | $2D+2$ |
+| Vector channel | $\langle V,V\rangle$; mean and max of $\langle v_a,V\rangle$; mean of $\langle v_a,v_a\rangle$; with beams also $\langle V,b_\pm\rangle$ | 4, or 6 with beams |
+| Pair latent | mean of $E$ over real pairs and over its diagonal | $2C_p$ |
 
-## 12. Numerical precision
+## 14. Numerical precision
 
 In the frame the data were recorded in, float32 is adequate: the float32
 tests hold group membership, conservation, the lift correspondence and the

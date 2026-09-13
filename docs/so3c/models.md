@@ -3,7 +3,7 @@
 All classes are in [`benchmarks/so3c_models.py`](../../benchmarks/so3c_models.py)
 and are built by name through `benchmarks.models.build_model`, which is what
 `--models` on the command line resolves to. Parameter counts below were
-obtained by instantiating each model with its defaults.
+obtained by instantiating each model.
 
 ## Input format
 
@@ -13,20 +13,20 @@ real constituent, 0 for padding). `benchmarks.datasets.load_top_tagging_constitu
 produces it: the $K$ leading constituents by $p_T$, zero-padded, divided by one
 global scale (the RMS over real training constituents, which keeps
 $E^2-\vec p^{\,2}$ up to a constant factor). Each model builds its own lift
-internally, so the SO33 arguments of `build_model` (`T`, `bound_input`,
+internally, so the SO(3,3) arguments of `build_model` (`T`, `bound_input`,
 solver settings) do not apply to them.
 
 Flat models take `(B, F)` feature vectors (HIGGS, Adult).
 
 ## Registry
 
-| `--models` name | Class | Parameters | Flow | Lorentz-invariant logits |
+| `--models` name | Class | Parameters | Flow | Symmetry of the logits |
 |---|---|---:|---|---|
-| `so3c_invariant_set` | `SO3CInvariantSetClassifier` | 5,122 | none | **yes**, by construction |
-| `so3c_equivariant_set` | `SO3CEquivariantSetClassifier` | 9,056 | `SO3CActivation` per channel | **no**, once the connection is non-zero |
-| `so3c_covariant_set` | `SO3CCovariantSetClassifier` | 9,078 | one closed-form covariant step | **yes**, exactly |
-| `so3c_message_set` | `SO3CMessageSetClassifier` | 13,862 | 3 closed-form covariant rounds + scalar channel | **yes**, exactly |
-| `so3c_interaction_set` | `SO3CInteractionSetClassifier` | 5,652 | `SO3CInteraction` ODE | **yes**, to solver tolerance |
+| `so3c_invariant_set` | `SO3CInvariantSetClassifier` | 5,122 | none | Lorentz-invariant by construction |
+| `so3c_equivariant_set` | `SO3CEquivariantSetClassifier` | 9,056 | `SO3CActivation` per channel | **not invariant** once the connection is non-zero |
+| `so3c_covariant_set` | `SO3CCovariantSetClassifier` | 9,078 | one closed-form covariant step | Lorentz-invariant, exactly |
+| `so3c_message_set` | `SO3CMessageSetClassifier` | 13,862 | 3 closed-form covariant rounds + scalar channel | Lorentz-invariant, exactly; with `beams`, covariant together with the beams and invariant under rotations about the beam axis |
+| `so3c_interaction_set` | `SO3CInteractionSetClassifier` | 5,652 | `SO3CInteraction` ODE | Lorentz-invariant to solver tolerance |
 | `so3c` | `SO3CBottleneck(mode="dynamic")` | $6F+170$ | exact flow on a learned 6-D embedding | no symmetry (learned lift) |
 | `so3c_static` | `SO3CBottleneck(mode="static")` | $6F+26$ | same, 6 constant coefficients | no symmetry |
 | `so3c_multi` | `MultiChannelSO3C` (4 blocks) | $24F+674$ | 4 parallel bottleneck flows | no symmetry |
@@ -53,15 +53,29 @@ connection head to random non-zero values, on random jets transformed by
 | `so3c_interaction_set` (`rtol=1e-5`) | $5.4\times10^{-7}$ | $4.7\times10^{-7}$ |
 | `so3c_equivariant_set` | $6.7\times10^{-2}$ | $3.3\times10^{-1}$ |
 
+With beams the logits are not meant to be invariant under a Lorentz
+transformation of the jet alone. For `beams=True, channels=8` with random
+weight heads, the largest absolute logit change was $2.2\times10^{-16}$ with the
+beams transformed along with the jet and $3.1\times10^{-2}$ with them held
+fixed, while a rotation about the beam axis changed nothing
+($1.4\times10^{-16}$). All the transformations tried are in
+[theory.md §11](theory.md#11-beams-what-symmetry-survives).
+
 The same distinction shows on real data: see the boost-robustness table in
-[experiments.md](experiments.md#d-boost-robustness). The mechanism is in
-[theory.md §5](theory.md#5-conservation-is-not-equivariance). In the test suite,
-`test_trained_regime_invariance`, `test_covariant_set_is_equivariant_when_excited`,
+[experiments.md](experiments.md#e-boost-robustness). The mechanism is in
+[theory.md §5](theory.md#5-conservation-is-not-equivariance). In the test
+suite, `test_trained_regime_invariance`,
+`test_covariant_set_is_equivariant_when_excited`,
 `test_message_set_is_equivariant_when_excited`,
 `test_message_set_neighbour_graph_is_equivariant` and
 `test_interaction_set_is_equivariant_when_excited` exercise non-zero
-connections. `test_set_lorentz_invariance` and `test_classifier_invariance`
-use freshly built models, so for the flow models they check the readout only.
+connections; `test_message_set_beams_are_covariant_inputs`,
+`test_message_set_bundle_is_exactly_covariant`,
+`test_message_set_vector_channel_is_exactly_covariant`,
+`test_message_set_pair_latent_symmetries` and
+`test_message_set_eq2to2_is_permutation_equivariant` cover the beams and the
+switches. `test_set_lorentz_invariance` and `test_classifier_invariance` use
+freshly built models, so for the flow models they check the readout only.
 
 ---
 
@@ -128,7 +142,9 @@ The covariant step applied for several rounds, with a scalar state per
 particle and complex channel mixing
 ([theory.md §10](theory.md#10-covariant-message-passing-so3c_message_set)).
 The readout adds the masked mean and max of the scalar state, so its input is
-$11C+C(C+1)+2D+7=87$ features at the defaults.
+$11C+C(C+1)+2D+7=87$ features at the defaults. The best configuration measured
+so far is `beams=True, channels=8` at $K=64$
+([experiments.md, table A](experiments.md#a-canonical-top-tagging)).
 
 | Argument | Default | CLI flag | Meaning |
 |---|---|---|---|
@@ -141,8 +157,13 @@ $11C+C(C+1)+2D+7=87$ features at the defaults.
 | `T` | 1.0 | `--flow-T` | flow time |
 | `channel_mixing` | `True` | — | per-round complex mixing matrices |
 | `neighbors` | `None` | `--neighbors` | $k$ strongest partners by $\lvert\operatorname{Re}z_a\cdot z_b\rvert$; `None` is dense |
+| `beams` | `False` | `--beams` | the two beam particles ([theory.md §11](theory.md#11-beams-what-symmetry-survives)); dense graph only |
+| `beam_energy` | 1.0 | — | energy $E_b$ of each beam, in the normalised input units |
+| `dropout` | 0.0 | `--dropout` | dropout in the readout MLP |
+| `mass_input`, `self_edges`, `relnorm_edge`, `falpha`, `vector_channel`, `pair_latent` | see below | see below | the switches below |
 
-Parameters for the variants that were run (`neighbors` does not change the count):
+Parameters of the configurations that were run (`neighbors` and `dropout` do
+not change the count):
 
 | Configuration | Parameters |
 |---|---:|
@@ -154,11 +175,39 @@ Parameters for the variants that were run (`neighbors` does not change the count
 | `channels=8` | 21,658 |
 | `channels=16` | 43,970 |
 | `hidden=256` | 92,774 |
+| `beams=True` | 15,038 |
+| `beams=True, channels=8` (the headline) | 22,834 |
+| `beams=True, channels=16` | 45,146 |
 
 Note that `rounds=1` is not `so3c_covariant_set` plus a scalar channel: this
 model also bounds the input lift and the connection, and mixes channels.
-`regularization_loss()` is $10^{-3}$ times the squared weights of all weight
-heads. A dense round costs $O(CK^2)$ per jet.
+`regularization_loss()` is $10^{-3}$ times the squared weights of the flow
+weight heads. A dense round costs $O(CK^2)$ per jet.
+
+### Switches not yet trained
+
+All are off by default, so the defaults reproduce the measured results, and
+none has been trained on the full data.
+[theory.md §12](theory.md#12-switches-implemented-but-not-yet-trained) describes
+what each computes. Parameter counts are on the headline configuration
+(`beams=True, channels=8`, 22,834 parameters).
+
+| Argument | CLI flag | Parameters | Change |
+|---|---|---:|---|
+| `mass_input=False` | `--no-mass-input` | 22,634 | drops the per-constituent $m^2$, rounding noise on this dataset |
+| `self_edges=False` | `--no-self-edges` | 22,834 | removes $a=b$ from the dense graph |
+| `relnorm_edge=True` | `--relnorm-edge` | 23,602 | adds $d_{ab}=s_{aa}+s_{bb}-2s_{ab}$ to the edge features |
+| `falpha=3` | `--falpha 3` | 24,373 | three learnable compressions of the pair invariants instead of asinh |
+| `vector_channel=True` | `--vector-channel` | 23,365 | a covariant 4-vector per node beside the bivector; dense graph only |
+| `pair_latent=8` | `--pair-latent 8` | 26,514 | a rank-2 pair state updated by 7 permutation-equivariant maps; dense graph only |
+| `vector_channel=True, pair_latent=8`, both fixes | all four flags | 26,861 | the architectural changes and the two fixes together |
+
+CPU time per training step relative to the headline, as recorded in
+[`SO3C_STATUS.md`](../../SO3C_STATUS.md): 1.00× for the two fixes, 1.10× for the
+vector channel, 1.30× for the relative-norm edge, 1.56× for the pair latent,
+1.64× for the vector channel, pair latent and both fixes together, and 3.54×
+for `falpha=3`. GPU ratios have not been measured, and CPU ratios have misled
+before.
 
 ## `so3c_interaction_set`
 
