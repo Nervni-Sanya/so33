@@ -49,6 +49,8 @@ Last updated 2026-09-13. This is the single place to start from. Commit hashes p
 | Connection built from invariants (`so3c_equivariant_set`) | **Not equivariant once trained**: 0.9424 falls to 0.4414 (below chance) at boost scale 3. Replaced by the covariant connection `z_a × Σ_b φ z_b` | `c3a98d0`, `f305ae4` |
 | ODE solver instead of closed form (`so3c_interaction_set`) | 0.9735, 9.5× slower | `c3a98d0` |
 | K for the covariant model | K=32/64/128 → 0.9746/0.9772/0.9781, rejection 312/638/639: saturates at 64 | `6b4e7b5` |
+| **K beyond 64, by energy content** (raw 200-slot parquet, 100k test jets) | K=64 keeps 99.75% of jet energy on average (p1 95.3%); 82% of jets are complete and have exact jet mass. K=128 adds only the soft tail. Combined with the K sweep above and 19.3 h per seed even with kNN: **closed** | this commit |
+| **Per-constituent mass m² as an input** | rounding noise: \|m²\|/E² median 4.6e-8, max 2.3e-7, 50% negative, log\|m²\| tracks log E² with slope 0.998. The constituents are massless | this commit |
 | Channels on the broken model | flat, 0.9743–0.9745 across 22× parameters | — |
 | kNN(16) graph at K=32 | −0.0011 AUC for 2% wall clock saved | `1f01ddd` |
 | Capacity **without** beams (K=32 probe) | flat: scalar_dim 24, hidden 256, channels 8/16, rounds 6 all within 0.0006 AUC of the anchor | `abd5660` |
@@ -58,6 +60,7 @@ Last updated 2026-09-13. This is the single place to start from. Commit hashes p
 | Longer training | 35 epochs: +0.00015 AUC, −14 rejection, 75% more compute | `c325950` |
 | Regularisation | dropout 0.05 + wd 1e-4: −0.0011 AUC, −133 rejection. The model **underfits** | `c325950` |
 | Capacity **with** beams | channels 8: +0.0004 AUC, +67 rejection; **channels 16: worse than 8** (0.98111 / 811) at 1.5× cost | `c325950`, `90f2ead` |
+| K=128 wall clock | dense 602 s/epoch on 100k jets (60.8 h full protocol); kNN(16) 191 s (19.3 h), 3.15× faster | `90f2ead` |
 | Two-seed ensemble | +0.0004 AUC; member scores correlate at 0.994 | `49e0c61`, `b72437f` |
 | Epochs 25–30 vs 24 (session cap) | +0.00022 AUC | `b72437f` |
 
@@ -65,34 +68,34 @@ Last updated 2026-09-13. This is the single place to start from. Commit hashes p
 
 ## Open — candidates
 
-### Measured, not yet acted on
+### Verified defects in the current model (free to fix)
 
-- **K=128 wall clock** (beamless channels 8, 100k jets, batch 256, `90f2ead`): dense 602 s/epoch (60.8 h for the full protocol) against kNN(16) 191 s/epoch (19.3 h). Reachable, not cheap; beams are dense-graph only; kNN accuracy at K=128 is untested.
-- **Self-edges in the dense graph** (verified in `SO3CMessageSetClassifier`): the dense path includes `a = b` in the scalar message sum and counts N, not N−1, in the denominator. The flow is unaffected, since `z_a × w_aa z_a = 0`. LorentzNet masks the self-edge. Free to fix.
+- **m² fed as noise.** `h_init` takes `asinh(m²)` per node, and three of the seven `_minkowski_stats` readout features are per-particle m² moments. All of it is rounding noise (see Closed).
+- **Self-edges in the dense graph.** The dense path includes `a = b` in the scalar message sum and counts N, not N−1, in the denominator. The flow itself is unaffected, since `z_a × w_aa z_a = 0`. LorentzNet masks the self-edge; our sparse path already excludes it.
 
-### Unverified — from the gap-to-SOTA workflow
+### Best-motivated architectural candidates
 
-Full text is in `so3c_notes/gap_to_sota_2026-09-13.md`. Three of its six agents (error profile, ranking, critique) failed on the usage limit, so these are unranked and unchecked. The costs below are the agents' estimates.
+- **Rank-2 pair latent** with a reduced Eq2→2 aggregator basis (7 of PELICAN's 15). PELICAN carries a [B,N,N,C] state through its blocks; we collapse pairs to nodes every round. The verified table-2 comparison — 1k PELICAN parameters match our 22.8k — is consistent with this being the dominant carrier. Outcome likely bimodal: a real step toward 1400–1800 rejection, or under +0.0005 if our flow already supplies it. Agent estimate: screen at 20% data × 3 seeds ≈ 11 GPU-h.
+- **A vector channel alongside the bivector.** Two reasons, one measured elsewhere and one structural:
+  - arXiv:2606.21790 (abstract, verified) finds that in L-GATr "bivector channels are negligible for top-quark tagging while vector-like channels are dominant". The LLoCa (2505.20280) and slim L-GATr (2512.17011) abstracts do not address grades; their bodies are unchecked.
+  - Our lift `z_a = bivec(p_a, P)` is **unchanged under p_a → p_a + λP**, so it discards each constituent's component along the jet axis. The scalar channel recovers ⟨p_a, P⟩ only as an invariant. A covariant vector v_a = p_a keeps it — the same kind of missing-information problem that beams fixed.
 
-| candidate | claimed mechanism | claimed gain | claimed cost |
-|---|---|---|---|
-| **Rank-2 pair latent** with a reduced Eq2→2 aggregator basis (7 of PELICAN's 15) | PELICAN carries a [B,N,N,C] state through L blocks; we collapse pairs to nodes every round. Likely the dominant carrier (the table-2 comparison above is consistent with it) | bimodal: 1400–1800 rejection, or < +0.0005 if it duplicates the flow | screen at 20% data × 3 seeds ≈ 11 GPU-h |
-| **f_α multi-resolution embedding** of invariants, learnable exponents | PELICAN Sec 3.1; handles 8 orders of magnitude of dynamic range | +0.0005–0.0015 AUC | ~0 runtime |
-| N^α / N̄^α rescaling on aggregators | sets sum-vs-mean semantics; our flow angle scales with Σ_b w_b z_b | +0.0002–0.0008 | ~0 |
-| Relative-norm edge feature d_ab = s_aa + s_bb − 2 s_ab | LorentzNet Eq 3.2 feeds ‖x_i − x_j‖²; not recoverable after our asinh | +0.0003–0.001 | ~0 runtime |
-| Depth over width | L-GATr-slim scaling (arXiv:2512.17011): ~10 blocks with fewer channels at small budgets | unclear; our rounds 6 was −0.0006 **without** beams | K=32 pilot ≈ 2.4 GPU-h |
-| Softmax attention over w_b | normalised aggregation; needed for depth to train | +0.0002–0.0005 | ~1.05× |
-| **Vector channel alongside the bivector** | two papers report bivector grades as the least useful; add covariant v_a carrying the 4-momentum | potentially large; a critique of the core design | ~1.4× per epoch |
-| Time-axis reference particle (1,0,0,0) | a third symmetry-breaking reference, as in L-GATr | +0.0002–0.0004 | 1.03× |
-| Best-validation checkpoint instead of last epoch | LorentzNet reports the best-val checkpoint; a protocol match | +0.0002–0.0005 | 0 |
-| Length-bucketed dynamic K | all constituents at 0.66× the pairwise cost | cost cut 27% | ~0.2 GPU-h to validate |
-| Lion optimiser, lr 3e-4, wd 0.2 | a different optimiser, not the ruled-out AdamW bundle; a training-limit control | a few 1e-4 | K=32 ≈ 1.8 GPU-h |
-| JetClass pretraining | the only published result above PELICAN (L-GATr 2894 rejection, arXiv:2411.00446) | +29% rejection at full budget | ≥ 25 GPU-h for a truncated version; changes the comparison class |
+### Cheap candidates (unverified gain)
 
-**Agent claims that contradict our plan and need checking first:**
-- *K is 97% exhausted at K=64* (finding 10): K=64 is said to hold 99.75% of jet energy. If true, the K=128 cost measurement above answers a question not worth asking. Checkable on CPU from `data/toptagging/*.parquet`.
-- *The per-constituent mass m² is float noise* (finding 12), which would make one of our `h_init` inputs noise. Checkable on CPU.
-- *Bivectors are the weakest grade* (finding 21). This is the most consequential claim and the least verified; the arXiv IDs cited (2505.20280, 2606.21790, 2608.02735, 2512.17011) have not been opened.
+| candidate | mechanism | note |
+|---|---|---|
+| True multiplicity as a jet scalar | multiplicity separates classes (signal mean 54.7, background 43.4 constituents) and is clipped at 64 for 17.8% of jets | Lorentz invariant; count from the K=128 data before slicing |
+| Relative-norm edge feature d_ab = s_aa + s_bb − 2 s_ab | LorentzNet Eq 3.2 feeds ‖x_i − x_j‖²; not recoverable after asinh | +2C edge inputs |
+| f_α multi-resolution embedding, learnable exponents | PELICAN Sec 3.1: ((1+x)^(α²) − 1)/α², α initialised over [0.05, 0.5] | **not** zero-runtime for us, contrary to the agent: PELICAN applies it to one dot-product channel, we would apply it to 6C pair features |
+| N^α / N̄^α aggregation rescaling | sum-vs-mean semantics; our flow angle scales with Σ_b w_b z_b | ~0 runtime |
+| Time-axis reference particle (1,0,0,0) | a third symmetry-breaking reference, as in L-GATr | 1.03× cost |
+| Softmax attention over w_b | normalised aggregation; needed for depth | ~1.05× |
+| Depth over width | ~10 blocks with fewer channels at small budgets (slim L-GATr) | our rounds 6 was −0.0006, but **without** beams |
+| Best-validation checkpoint | LorentzNet reports the best-val checkpoint | protocol match; +0.0002–0.0005 claimed |
+| Lion optimiser, lr 3e-4, wd 0.2 | a different optimiser, not the ruled-out AdamW bundle | a training-limit control |
+| JetClass pretraining | the only published result above PELICAN (L-GATr 2894, arXiv:2411.00446) | ≥ 25 GPU-h truncated; changes the comparison class |
+
+Full agent text: `so3c_notes/gap_to_sota_2026-09-13.md`. Three of the workflow's six agents failed on the usage limit, so the findings there are unranked.
 
 ## Infrastructure traps
 
@@ -115,9 +118,10 @@ Full text is in `so3c_notes/gap_to_sota_2026-09-13.md`. Three of its six agents 
 | float32 in the boost diagnostic | fakes a 0.023 AUC symmetry break at boost scale 2 | `run_boost_robustness.py` defaults to float64 |
 | Beams change what "invariant" means | with fixed beams the output must change | measure with the beams moved along with the jet |
 | Zero-initialised connection heads | equivariance tests pass vacuously on the identity flow | tests excite the heads and assert the logits move |
-| Local npz cache stores only K=32 | local CPU checks cannot see past 32 constituents (verified: shape `(n, 32, 4)`) | K=64/128 data exists only on Kaggle (`nsanya/so3c-data-prep-k-128`); rebuild locally from `data/toptagging/*.parquet` if needed |
+| Local npz cache stores only K=32 | local CPU checks cannot see past 32 constituents (verified: shape `(n, 32, 4)`) | K=64/128 data exists only on Kaggle (`nsanya/so3c-data-prep-k-128`); the raw 200-slot parquet is local in `data/toptagging/` |
 | Bash tool collapses `\\` to `\` | `\times` became TAB + "imes" in a LaTeX edit | write files containing backslashes with the Write tool, or build them with `chr(92)` |
 | Large subagent workflows | 45 agents: 38 failed on the usage limit; 6 agents: 3 failed | keep workflows small; verify bounded claims directly |
+| Unverified agent output | a findings file said "zero runtime" for f_α and cited abstracts that do not make the claim | verify before building on it; record the verification |
 
 ## Compute and quota facts
 

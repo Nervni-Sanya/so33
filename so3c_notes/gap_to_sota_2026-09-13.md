@@ -466,3 +466,13 @@ Each decade in E multiplies std(m^2) by ~100. Scripts probe3.py / probe5.py in t
 
 **confidence.** high
 
+## Verification, 2026-09-13
+
+Three claims above were checked directly, because each would redirect GPU quota.
+
+- **Finding 10, K lever exhausted at K=64: CONFIRMED.** Measured on 100k test jets from the raw 200-slot parquet (data/toptagging/test.parquet), float64. Multiplicity mean 49.0, median 48, p95 79, max 153 (signal 54.7, background 43.4). K=32: 82.7 percent of jets truncated, mean energy kept 0.95668, jet mass exact for 17.3 percent. K=64: 17.8 percent truncated, mean energy kept 0.99753 (p1 0.9533, p0.1 0.9049), jet mass exact for 82.2 percent, relative mass error p99 7.4e-2. K=128: nothing truncated. The agent quoted 99.75 percent; the measurement agrees.
+- **Finding 12, per-constituent m-squared is noise: CONFIRMED.** abs(m2)/E^2 from the stored values: median 4.57e-8, p99 1.52e-7, max 2.32e-7, 50.0 percent negative, none above 1e-4. In float32 as the model computes it: median 5.45e-8, max 3.44e-7. log abs(m2) against log E^2 has slope 0.998, the signature of rounding noise.
+- **Finding 21, bivectors the weakest grade: PARTLY CONFIRMED.** arXiv:2606.21790 (Agarwal, Khare, Kumar, 19 Jun 2026, What Do Lorentz-Equivariant Jet Taggers Learn?) states in its abstract that grade ablations on L-GATr show bivector channels negligible for top-quark tagging while vector-like channels are dominant but seed variable. The abstracts of arXiv:2505.20280 (LLoCa) and arXiv:2512.17011 (Economical Jet Taggers, slim L-GATr) do not address grades; their bodies were not read.
+- **Finding 2, f_alpha costs zero runtime: WRONG for this model.** PELICAN applies f_alpha to a single dot-product channel. Our edge features hold 6C invariant channels per pair, so a bank of n exponents multiplies that part of the edge input width by n.
+
+Independent of the agents: the bivector lift bivec(p_a, P) is unchanged under p_a -> p_a + lambda P, so it discards each constituent component along the jet axis. That is a structural reason, specific to this construction, to add a vector channel.
