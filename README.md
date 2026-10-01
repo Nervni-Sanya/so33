@@ -23,8 +23,9 @@ a benchmark harness, and the source of an accompanying preprint
 - **`benchmarks/`** — datasets, models, the training loop, and runnable experiments
   (synthetic boost-OOD, HIGGS, Adult, top-tagging constituents).
 - **`paper/`** — the preprint (`main.tex`), figures, and the annotated result notes.
-- **`tests/`** — 14 tests covering the basis, forward/adjoint consistency,
-  regularization, training, and the ablation/dtype variants.
+- **`tests/`** — 26 tests covering the basis, forward/adjoint consistency,
+  regularization, training, the ablation/dtype variants, and the canonical
+  top-tagging loader, background-rejection metric and result aggregation.
 
 ## Key findings
 
@@ -141,12 +142,14 @@ python -m benchmarks.run_top_tagging --representation constituents \
 ## Tests
 
 ```bash
-python -m pytest tests/ -v     # 14 tests
+python -m pytest tests/ -v     # 26 tests
 ```
 
 Covers basis construction & the metric-connection condition, forward pass,
 adjoint-vs-direct autograd consistency, Frobenius regularization, a minimal
-training step, synthetic causal classification, and the ablation/dtype variants.
+training step, synthetic causal classification, the ablation/dtype variants, the
+canonical Kasieczka split loader (with and without a validation file), background
+rejection against a hand-computed ROC, and `benchmarks.aggregate`.
 
 ## Paper
 
