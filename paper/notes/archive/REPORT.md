@@ -1,3 +1,11 @@
+> **SUPERSEDED (archived).** Benchmark report from 2026-06-01, written before the
+> boost-OOD diagnosis, the eta-bound fix, the multi-seed runs and the canonical
+> Kasieczka top-tagging protocol. Some numbers differ from the paper (for example the
+> relu out-of-distribution gap). The preprint (`paper/main.tex`) and
+> `paper/notes/` are the current record; this file is kept for history only.
+
+---
+
 # Отчёт о бенчмаркинге архитектуры SO33
 
 **Дата:** 2026-06-01
