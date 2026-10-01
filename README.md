@@ -58,6 +58,13 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+To run the benchmarks, add the extras (`scikit-learn` is needed for AUC and
+background rejection; the rest is for the top-tagging download):
+
+```bash
+pip install -e ".[bench]"
+```
+
 ```python
 import torch
 from so33 import SO33Activation, SO33Network
@@ -110,8 +117,10 @@ torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
 ## Reproducing the experiments
 
 All commands run from the repo root and write per-seed JSON to `results/`;
-`python -m benchmarks.aggregate` reduces them to tables. Full pipeline and wall
-times are in Appendix B of the paper. Examples:
+`python -m benchmarks.aggregate` reduces them to tables (AUC, and background
+rejection 1/ε_B at ε_S = 0.3 where it was measured). The whole pipeline is in
+[`paper/runs/week1.sh`](paper/runs/week1.sh) and Appendix B of the paper, with wall
+times. Examples:
 
 ```bash
 # Synthetic boost-OOD (the headline), 3 seeds
@@ -120,8 +129,11 @@ for s in 0 1 2; do python -m benchmarks.run_boost_ood --seed $s; done
 # Equivariance probe + Figure 1
 python -m benchmarks.figure_equivariance
 
-# Top tagging on the canonical Kasieczka split (downloads ~2M jets first:
-# python -m benchmarks.download_top_tagging --cache-dir data)
+# Top tagging on the canonical Kasieczka split. Download first (~2M jets):
+#   python -m benchmarks.download_top_tagging --cache-dir data
+# The run keeps the 1.2M-jet train split in RAM (~4 GB) and takes ~36 min per seed
+# on a CPU; if memory is tight, add --max-train-samples 300000 (val and test are
+# always loaded in full).
 python -m benchmarks.run_top_tagging --representation constituents \
     --canonical-splits --models eta_invariants --epochs 30 --seed 0
 ```

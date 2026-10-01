@@ -26,7 +26,7 @@ loader/split (seed 0, 30 epochs) confirm the gap is real:
 | so33_signature_only | 50     | 0.691    | 0.750    |
 
 Gap: **+0.185 AUC** over relu_bottleneck, **+0.194** over
-so33_signature_only, all on the identical split. The old REPORT.md
+so33_signature_only, all on the identical split. The old REPORT.md (now in notes/archive/)
 numbers (0.749 / 0.738) reproduce within noise on the current loader,
 so the split refactor did NOT make the task easier -- the gap stands.
 
