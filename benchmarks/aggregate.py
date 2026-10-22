@@ -38,12 +38,18 @@ def _mean_std(xs: list[float]) -> tuple[float, float]:
 
 
 def load_results(results_dir: pathlib.Path) -> list[dict[str, Any]]:
-    return [json.loads(p.read_text()) for p in sorted(results_dir.glob("*.json"))]
+    return [json.loads(p.read_text(encoding="utf-8"))
+            for p in sorted(results_dir.glob("*.json"))]
 
 
 def group_by_experiment_model(records: list[dict]) -> dict[tuple[str, str], list[dict]]:
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in records:
+        # Not every JSON in results/ is a per-model record:
+        # diagnose_equivariant writes a diagnostic dump with an
+        # "experiment" but no "model" field.
+        if not isinstance(r, dict) or "experiment" not in r or "model" not in r:
+            continue
         groups[(r["experiment"], r["model"])].append(r)
     return groups
 
@@ -100,9 +106,10 @@ def render_dataeff(groups: dict[tuple[str, str], list[dict]]) -> str:
 def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
     """Render real-data tabular experiments (HIGGS / Top Tagging / Neutral).
 
-    Splits each experiment into matched-bottleneck and natural-width
-    sub-tables based on the per-record ``family`` field. Reports
-    val_acc, test_acc, and AUC (when present).
+    Splits each experiment into matched-bottleneck, natural-width and
+    equivariant/invariant-set sub-tables based on the per-record
+    ``family`` field. Reports val_acc, test_acc, AUC and background
+    rejection 1/eps_B at eps_S=0.3 (when present).
     """
     tabular_experiments: dict[str, list[dict]] = defaultdict(list)
     for (exp, _model), recs in groups.items():
@@ -118,7 +125,7 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
         records = tabular_experiments[exp]
         out_lines.append(f"## {exp}")
         out_lines.append("")
-        for family in ("matched_bottleneck", "natural_width"):
+        for family in ("matched_bottleneck", "natural_width", "equivariant_set"):
             family_recs = [r for r in records if r["family"] == family]
             if not family_recs:
                 continue
@@ -128,13 +135,21 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
 
             has_auc = any(r["test_metrics"].get("test_auc") is not None
                           for r in family_recs)
+            has_rej = any(r["test_metrics"].get("bg_rej_30") is not None
+                          for r in family_recs)
 
-            label = "matched bottleneck (hidden=6)" if family == "matched_bottleneck" else "natural width MLPs"
+            label = {
+                "matched_bottleneck": "matched bottleneck (hidden=6)",
+                "natural_width": "natural width MLPs",
+                "equivariant_set": "equivariant / invariant set models",
+            }[family]
             out_lines.append(f"### {label}")
             out_lines.append("")
             header_cells = ["model", "n_seeds", "params", "val_acc", "test_acc"]
             if has_auc:
                 header_cells.append("test_auc")
+            if has_rej:
+                header_cells.append("1/eB@0.3")
             out_lines.append("| " + " | ".join(header_cells) + " |")
             out_lines.append("|" + "|".join(["---"] + ["---:"] * (len(header_cells) - 1)) + "|")
 
@@ -149,20 +164,29 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
                                           if r["test_metrics"].get("test_auc") is not None])
                 else:
                     test_auc = None
-                rows.append((model, len(recs), n_params, val_acc, test_acc, test_auc))
+                # 1/eps_B is inf when a run separates the classes perfectly
+                # at eps_S=0.3; keep only finite values so one such seed does
+                # not turn the mean/std into inf/nan.
+                rej = [r["test_metrics"]["bg_rej_30"] for r in recs
+                       if r["test_metrics"].get("bg_rej_30") is not None
+                       and math.isfinite(r["test_metrics"]["bg_rej_30"])]
+                bg_rej = _mean_std(rej) if rej else None
+                rows.append((model, len(recs), n_params, val_acc, test_acc,
+                             test_auc, bg_rej))
 
-            sort_key = -1
             if has_auc:
                 rows.sort(key=lambda r: -(r[5][0] if r[5] else -1))
             else:
                 rows.sort(key=lambda r: -r[4][0])
 
-            for model, n, p, v, t, a in rows:
+            for model, n, p, v, t, a, rj in rows:
                 cells = [model, str(n), str(p),
                          f"{v[0]:.3f}±{v[1]:.3f}",
                          f"{t[0]:.3f}±{t[1]:.3f}"]
                 if has_auc:
                     cells.append(f"{a[0]:.3f}±{a[1]:.3f}" if a else "—")
+                if has_rej:
+                    cells.append(f"{rj[0]:.0f}±{rj[1]:.0f}" if rj else "—")
                 out_lines.append("| " + " | ".join(cells) + " |")
             out_lines.append("")
     return "\n".join(out_lines)
@@ -226,7 +250,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(out)
     if args.out:
-        pathlib.Path(args.out).write_text(out)
+        # Explicit UTF-8: the tables contain "±", and the platform default
+        # (cp1251/cp1252 on Windows) turns it into mojibake in the file.
+        pathlib.Path(args.out).write_text(out, encoding="utf-8")
     return 0
 
 

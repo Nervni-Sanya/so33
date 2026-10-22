@@ -18,6 +18,10 @@ setup(
     ],
     extras_require={
         "dev": ["pytest", "matplotlib", "jupyter"],
+        # Everything the benchmark harness needs, incl. the top-tagging
+        # download:  pip install -e ".[bench]"
+        "bench": ["scikit-learn>=1.0", "huggingface_hub", "pandas",
+                  "pyarrow", "tables"],
     },
     classifiers=[
         "License :: OSI Approved :: MIT License",

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import warnings
 from dataclasses import asdict
 from typing import Iterable
 
@@ -70,8 +71,19 @@ def evaluate_test(
                 idx = int((tpr >= eff).argmax())
                 eps_b = float(fpr[idx])
                 out[key] = float("inf") if eps_b <= 0.0 else 1.0 / eps_b
-        except Exception:
-            pass
+        except ImportError:
+            warnings.warn(
+                "scikit-learn is not installed: test_auc and bg_rej_* are "
+                "omitted from the results. Install it with "
+                "`pip install scikit-learn`.",
+                RuntimeWarning, stacklevel=2,
+            )
+        except Exception as e:
+            warnings.warn(
+                f"could not compute test_auc/bg_rej_*: "
+                f"{type(e).__name__}: {e}",
+                RuntimeWarning, stacklevel=2,
+            )
     return out
 
 
@@ -172,6 +184,7 @@ def run_tabular_experiment(
             "val_acc":   train_res.final_val_acc,
             "test_acc":  test_res["test_acc"],
             "test_auc":  test_res.get("test_auc"),
+            "bg_rej_30": test_res.get("bg_rej_30"),
             "walltime":  train_res.walltime_sec,
         }
         summary.append(line)
@@ -188,6 +201,7 @@ def run_tabular_experiment(
 
 def _print_summary(experiment: str, summary: list[dict]) -> None:
     has_auc = any(r["test_auc"] is not None for r in summary)
+    has_rej = any(r.get("bg_rej_30") is not None for r in summary)
 
     def fmt_table(rows: list[dict], heading: str) -> None:
         if not rows:
@@ -196,6 +210,8 @@ def _print_summary(experiment: str, summary: list[dict]) -> None:
         cols = "params  val_acc  test_acc"
         if has_auc:
             cols += "  test_auc"
+        if has_rej:
+            cols += "  1/eB@0.3"
         print(f"{'model':<24} {cols}")
         print("-" * (25 + len(cols)))
         for r in rows:
@@ -203,9 +219,14 @@ def _print_summary(experiment: str, summary: list[dict]) -> None:
                     f"{r['val_acc']:>7.3f}  {r['test_acc']:>8.3f}")
             if has_auc:
                 line += f"  {r['test_auc']:>8.3f}" if r["test_auc"] is not None else "       —"
+            if has_rej:
+                rej = r.get("bg_rej_30")
+                line += f"  {rej:>8.0f}" if rej is not None else "         —"
             print(line)
 
     matched = [r for r in summary if r["family"] == "matched_bottleneck"]
     natural = [r for r in summary if r["family"] == "natural_width"]
+    equivariant = [r for r in summary if r["family"] == "equivariant_set"]
     fmt_table(matched, "matched bottleneck (hidden=6)")
     fmt_table(natural, "natural width MLPs")
+    fmt_table(equivariant, "equivariant / invariant set models")

@@ -595,22 +595,30 @@ Table~\ref{tab:topt-canonical} places our models on the canonical
 Kasieczka protocol next to published results for dedicated taggers.
 % NOTE: the published rows below are transcribed from memory of the
 % LorentzNet paper's comparison table -- VERIFY each against the
-% original papers (accuracy, AUC, and 1/eps_B at eps_S = 0.3) before
-% submission. Do not trust these values as-is.
+% original papers (accuracy, AUC, 1/eps_B at eps_S = 0.3, and parameter
+% count) before submission. Do not trust these values as-is. Known
+% doubts: the ParticleNet parameter count (several ParticleNet variants
+% are quoted in the literature) and which PELICAN paper the row belongs
+% to (the 2022 workshop paper, arXiv:2211.00454, or the later journal
+% version). The "roughly 45x" in the text below is 4802 against the
+% LorentzNet/PELICAN parameter counts in the table; redo it if those change.
 Two observations, in honest order. First, the dedicated architectures
 are far ahead: LorentzNet and PELICAN reach $\mathrm{AUC} \approx
 0.987$ and background rejections in the thousands, versus our $0.948$
 and $\approx 50$ -- we do not approach the state of the art, and the
 gap is a direct, same-protocol measurement, not an extrapolation.
-Second, within its own weight class the invariant readout is
-remarkably effective: a $4{,}802$-parameter MLP over seven pooled
-$\eta$-invariants of only the $32$ leading constituents -- no message
-passing, no attention, three to five orders of magnitude fewer
-parameters than the dedicated taggers -- reaches $\mathrm{AUC} =
-0.948$, identical across three seeds, and outperforms the
-non-invariant baseline trained under the identical protocol by
-$+0.193$ AUC and $6\times$ in background rejection. The comparison we
-claim is the latter one; the former we simply report.
+Second, the invariant readout is effective for its size: a
+$4{,}802$-parameter MLP over seven pooled $\eta$-invariants of only
+the $32$ leading constituents -- no message passing, no attention, and
+roughly $45\times$ fewer parameters than LorentzNet or PELICAN --
+reaches $\mathrm{AUC} = 0.948$, identical across three seeds, and
+outperforms the non-invariant baseline trained under the identical
+protocol by $+0.193$ AUC and $6\times$ in background rejection. LGN,
+at a comparable parameter count, is better still ($\mathrm{AUC}
+\approx 0.964$), so the parameter-count argument supports only the
+comparison with the larger taggers. The comparison we claim is the
+within-setup one against the non-invariant baseline; the comparison
+with the dedicated taggers we simply report.
 
 \begin{table}[t]
   \centering
@@ -847,7 +855,7 @@ mirror by \texttt{benchmarks.run\_higgs} on first invocation; Adult is
 fetched via \texttt{openml}. The top-tagging files require one
 Hugging Face download:
 \begin{verbatim}
-pip install huggingface_hub pandas pyarrow tables
+pip install -e ".[bench]"   # scikit-learn, huggingface_hub, pandas, pyarrow, tables
 python -m benchmarks.download_top_tagging --cache-dir data
 \end{verbatim}
 
