@@ -3,17 +3,23 @@ benchmarks.figure_equivariance
 ------------------------------
 Measure the empirical equivariance of SO33Activation as a function of
 the connection-coefficient norm, for each of the three input-bound
-modes. Writes a CSV (paper/figures/equivariance_data.csv) and a PDF
-plot (paper/figures/equivariance_vs_norm.pdf).
+modes. Writes a CSV (paper/figures/equivariance_data.csv), a two-panel
+PDF (paper/figures/fig_equivariance_two_metrics.pdf: eps_sigma and eps_m)
+and the single eps_m panel (paper/figures/equivariance_vs_norm.pdf).
 
-Two quantities are measured at each (||c||, bound) cell:
-  1. Activation-level rel err
+Two quantities are measured at each (||c||, bound) cell
+(see ``benchmarks.equivariance``):
+  1. Activation-level rel err (eps_sigma)
        E_b [ || sigma(g x) - g sigma(x) ||_2 / || sigma(x) ||_2 ]
-  2. Readout-feature invariance error
+  2. Readout-feature invariance error (eps_m)
        E_b [ | <sigma(x),sigma(x)>_eta - <sigma(gx),sigma(gx)>_eta | ]
 
-The latter is the more directly relevant quantity for the classifier
-(both architectures read out eta-invariants of the activation output).
+The flow conserves <v, v>_eta for every connection, so eps_m only tests
+whether the input bound is invariant; it is blind to the connection.
+eps_sigma measures equivariance of the activation itself, and is
+non-zero for every c != 0 whatever the bound. The figure shows both.
+Cells whose flow overflowed (non-finite or > 1e3) are drawn as crosses
+on the top edge instead of being dropped.
 
 Run:
     python -m benchmarks.figure_equivariance
@@ -23,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import pathlib
 import sys
 
@@ -30,7 +37,11 @@ import torch
 
 from so33 import SO33Activation
 from so33.basis import ETA, N_BASIS
+from benchmarks.equivariance import activation_equivariance
 from benchmarks.synthetic import random_so33_element
+
+# Values above this (or non-finite) are drawn as "overflow" markers.
+PLOT_CEILING = 1e3
 
 
 def make_act(mode: str | bool) -> SO33Activation:
@@ -43,21 +54,59 @@ def make_act(mode: str | bool) -> SO33Activation:
 def measure(act: SO33Activation, x: torch.Tensor, gs: torch.Tensor,
             eta: torch.Tensor) -> tuple[float, float]:
     """Return (activation rel err, readout-feature abs err) averaged over gs."""
-    act.eval()
-    with torch.no_grad():
-        y = act(x)
-        m2_y = (y * eta * y).sum(-1)
-        act_errs, feat_errs = [], []
-        for g in gs:
-            gx = x @ g.T
-            ygx = act(gx)
-            g_y = y @ g.T
-            num = (ygx - g_y).norm(dim=-1)
-            den = y.norm(dim=-1).clamp_min(1e-12)
-            act_errs.append((num / den).mean().item())
-            m2_gy = (ygx * eta * ygx).sum(-1)
-            feat_errs.append((m2_y - m2_gy).abs().mean().item())
-    return sum(act_errs)/len(act_errs), sum(feat_errs)/len(feat_errs)
+    res = activation_equivariance(act, x, gs)
+    return res["eps_sigma"], res["eps_m"]
+
+
+PANELS = {
+    2: r"$\varepsilon_\sigma$: $\|\sigma(gx)-g\sigma(x)\|/\|\sigma(x)\|$",
+    3: r"$\varepsilon_m$: $|m^2(\sigma x)-m^2(\sigma gx)|$",
+}
+
+
+def _plot(rows: list[tuple], pdf_path: pathlib.Path,
+          columns: tuple[int, ...]) -> pathlib.Path | None:
+    """One log-y panel per CSV column (2 = eps_sigma, 3 = eps_m)."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib not available; skipping PDF.", file=sys.stderr)
+        return None
+
+    labels = ["none", "euclidean", "eta"]
+    markers = {"none": "o", "euclidean": "s", "eta": "^"}
+    # Overflow crosses of different bounds at the same ||c|| would coincide;
+    # shift them sideways a little.
+    offsets = {"none": 0.85, "euclidean": 1.0, "eta": 1.18}
+    fig, axes = plt.subplots(1, len(columns), figsize=(4.6 * len(columns), 3.4),
+                             squeeze=False)
+    axes = axes[0]
+    for ax, col in zip(axes, columns):
+        for label in labels:
+            data = [(r[0], r[col]) for r in rows if r[1] == label]
+            ok = [(c, v) for c, v in data if math.isfinite(v) and v <= PLOT_CEILING]
+            bad = [c for c, v in data if not (math.isfinite(v) and v <= PLOT_CEILING)]
+            line, = ax.plot([c for c, _ in ok], [max(v, 1e-16) for _, v in ok],
+                            marker=markers[label], label=f"bound = {label}")
+            if bad:
+                ax.plot([c * offsets[label] for c in bad], [PLOT_CEILING] * len(bad),
+                        linestyle="none", marker="x", markersize=8,
+                        color=line.get_color())
+        ax.set_xscale("symlog", linthresh=0.01)
+        ax.set_yscale("log")
+        ax.set_ylim(1e-16, PLOT_CEILING * 4)
+        ax.set_xlabel(r"$\|c\|_2$ (symlog axis, linear below 0.01)")
+        ax.set_ylabel(PANELS[col])
+        ax.grid(True, which="both", alpha=0.3)
+    axes[0].legend(loc="lower right", frameon=False, fontsize=8)
+    axes[-1].text(0.02, 0.97,
+                  rf"$\times$: diverged (non-finite or $>10^{{{int(math.log10(PLOT_CEILING))}}}$)",
+                  transform=axes[-1].transAxes, va="top", fontsize=8)
+    fig.tight_layout()
+    fig.savefig(pdf_path)
+    return pdf_path
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -112,36 +161,13 @@ def main(argv: list[str] | None = None) -> int:
         w.writerows(rows)
     print(f"\nWrote {csv_path}")
 
-    # PDF figure: feat_abs_err vs ||c|| per bound mode (log y).
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("matplotlib not available; skipping PDF.", file=sys.stderr)
-        return 0
-
-    fig, ax = plt.subplots(figsize=(4.6, 3.2))
-    by_bound = {b: [] for _, b in [(0,"none"),(0,"euclidean"),(0,"eta")]}
-    by_bound = {"none": [], "euclidean": [], "eta": []}
-    for cnorm, label, _, feat in rows:
-        by_bound[label].append((cnorm, feat))
-    markers = {"none": "o", "euclidean": "s", "eta": "^"}
-    for label, data in by_bound.items():
-        xs = [c for c, _ in data]
-        ys = [max(f, 1e-16) for _, f in data]
-        ax.plot(xs, ys, marker=markers[label], label=f"bound = {label}")
-    ax.set_xscale("symlog", linthresh=0.01)
-    ax.set_yscale("log")
-    ax.set_xlabel(r"$\|c\|_2$  (connection coefficient norm)")
-    ax.set_ylabel(r"$|m^2(\sigma x) - m^2(\sigma gx)|$  (mean over batch)")
-    ax.set_title("Readout-feature equivariance vs connection norm")
-    ax.legend(loc="best", frameon=False)
-    ax.grid(True, which="both", alpha=0.3)
-    fig.tight_layout()
-    pdf_path = out_dir / "equivariance_vs_norm.pdf"
-    fig.savefig(pdf_path)
-    print(f"Wrote {pdf_path}")
+    # Two panels (eps_sigma, eps_m) for the rewrite; the single eps_m panel
+    # keeps the original file name used by the first manuscript version.
+    for name, columns in (("fig_equivariance_two_metrics.pdf", (2, 3)),
+                          ("equivariance_vs_norm.pdf", (3,))):
+        pdf_path = _plot(rows, out_dir / name, columns)
+        if pdf_path is not None:
+            print(f"Wrote {pdf_path}")
     return 0
 
 
