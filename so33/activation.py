@@ -9,8 +9,16 @@ Forward map
 
 where v(t) is the solution of the geodesic-like ODE:
 
-    dv^mu / dt = -sum_{nu, lambda}  omega^mu_{nu lambda}  v^nu  v^lambda
+    dv^mu / dt = -sum_{nu, lambda}  omega_eff^mu_{nu lambda}  v^nu  v^lambda
     v(0) = x
+
+with the effective (norm-capped) connection
+
+    omega_eff = omega * kappa / (kappa + ||omega||_F),      ||omega_eff||_F < kappa
+
+omega = sum_k c_k B^(k) is the learnable connection and kappa = connection_cap
+(default 1.0, i.e. omega / (1 + ||omega||_F)). The scale is an ordinary
+differentiable function of the coefficients: gradients flow through it.
 
 Trainable parameters
 --------------------
@@ -18,13 +26,38 @@ Trainable parameters
         K = 15 for full so(3,3), K = 6 for the so(3) ⊕ so(3) Euclidean
         ablation (signature_only=True).
 
+Structure of the flow
+---------------------
+Write the vector field as  f(v) = -M(v) v  with  M(v) = sum_k c_k v^{j_k} A^(k),
+an element of so(3,3). Two consequences:
+
+  * <v, v>_eta is conserved for every c (M(v) is eta-antisymmetric). A
+    readout of <sigma(x), sigma(x)>_eta therefore only sees the input bound,
+    never the connection: conservation is not equivariance.
+  * The flow is SO(3,3)-equivariant only at omega_eff = 0 (there is no
+    non-zero invariant rank-3 tensor on R^{3,3}); any learned c != 0 breaks
+    equivariance at O(||c||).
+
 Numerical stability (indefinite metric)
 ---------------------------------------
-The split signature (+,+,+,-,-,-) allows hyperbolic trajectories analogous
-to Lorentz boosts, which can diverge exponentially at random initialisation.
+Rotations (same-signature generators) preserve the Euclidean norm; boosts
+do not. Explicitly  d||v||^2/dt = -4 sum_{boost (i,j)} c_ij v_i v_j^2,  hence
+
+    d||v|| / dt  <=  alpha ||v||^2,    alpha = 4 / (3 sqrt 6) * ||omega_eff||_F
+
+(the constant is attained), so ||v(t)|| <= r0 / (1 - alpha r0 t). The flow
+cannot blow up on [0, T] for inputs with ||x||_2 <= r0 once
+alpha r0 T < 1, and ||v(T)|| <= r0 / (1 - alpha r0 T). Because
+||omega_eff||_F < kappa, choosing kappa = safe_connection_cap(r0, T, margin)
+guarantees ||v(T)|| <= r0 / (1 - margin) for EVERY value of the
+coefficients. With the default kappa = 1 and T = 0.3 only inputs with
+||x||_2 <~ 6 are covered; massless (null) inputs are not bounded by any
+SO(3,3)-equivariant input map, so the cap is the stabiliser of choice for
+unbounded (e.g. lifted four-momentum) inputs.
+
 Mitigations applied:
   1. Small init:   coeffs ~ N(0, 0.01)  →  omega ≈ 0  at start
-  2. Adaptive scale:  omega_eff = omega / (1 + ||omega||_F)  →  ||omega_eff|| < 1
+  2. Norm cap:     omega_eff = kappa * omega / (kappa + ||omega||_F)  (differentiable)
   3. Frobenius regularisation:  L_reg = reg_coef * ||omega||_F^2  (add to loss)
   4. Gradient clipping recommended in outer training loop (max_norm = 1.0)
 
@@ -32,21 +65,28 @@ Backward pass
 -------------
 Approach A (adjoint=True, default):
     torchdiffeq.odeint_adjoint implements the continuous adjoint sensitivity
-    method. Memory cost is O(1) w.r.t. trajectory length. The adjoint ODE is:
+    method. Memory cost is O(1) w.r.t. trajectory length. With a(T) = dL/dv(T)
+    the adjoint ODE is (omega_eff is not symmetric in its lower indices, so
+    both index orders appear):
 
-        dp^mu / dt = +2 * sum_{nu, lambda}  p^nu  omega^nu_{mu lambda}  v^lambda
+        da_rho / dt = sum_{mu, lambda}  a_mu ( omega_eff^mu_{rho lambda}
+                                             + omega_eff^mu_{lambda rho} ) v^lambda
 
     and the parameter gradient accumulates as:
 
         dL/dc_k = -integral_0^T  sum_{mu,nu,lambda}
-                      p^mu  omega^{(k),mu}_{nu lambda}  v^nu  v^lambda  dt
+                      a_mu  (d omega_eff^mu_{nu lambda} / d c_k)  v^nu  v^lambda  dt
+
+    where d omega_eff / d c_k includes the derivative of the norm cap.
 
 Approach B (adjoint=False):
-    Standard autograd through all ODE steps. Stores full trajectory in memory.
-    Useful for debugging; use for short sequences only.
+    Standard autograd through all ODE steps (the exact gradient of the
+    discretised map). Stores full trajectory in memory.
 """
 
 from __future__ import annotations
+
+import math
 
 import torch
 import torch.nn as nn
@@ -54,6 +94,41 @@ from torchdiffeq import odeint, odeint_adjoint
 
 from .basis import get_basis_stack, get_connection_tensor, N_BASIS, ETA
 from .ode_func import ODEFunc
+
+# d||v||/dt <= BOOST_GROWTH_CONST * ||omega_eff||_F * ||v||^2  (sharp constant).
+BOOST_GROWTH_CONST = 4.0 / (3.0 * math.sqrt(6.0))
+
+# torchdiffeq solvers that integrate on a fixed grid. Without a step_size
+# they take a single step over [0, T].
+_FIXED_GRID_METHODS = frozenset({
+    "euler", "midpoint", "heun2", "heun3", "rk4",
+    "explicit_adams", "implicit_adams", "fixed_adams",
+})
+
+
+def safe_connection_cap(input_norm: float, T: float, margin: float = 0.5) -> float:
+    """Connection cap kappa that makes the flow provably blow-up free.
+
+    For every value of the coefficients, ||omega_eff||_F < kappa, so with
+    alpha = BOOST_GROWTH_CONST * kappa the bound d||v||/dt <= alpha ||v||^2
+    gives, for any input with ||x||_2 <= input_norm,
+
+        ||v(t)||_2 <= ||x||_2 / (1 - margin)   on [0, T]
+
+    when kappa = margin / (BOOST_GROWTH_CONST * input_norm * T).
+    margin = 0.5 therefore bounds the output by twice the input norm.
+
+    Parameters
+    ----------
+    input_norm : largest Euclidean norm of the inputs the activation will see.
+    T          : integration horizon.
+    margin     : alpha * input_norm * T, in (0, 1).
+    """
+    if input_norm <= 0.0 or T <= 0.0:
+        raise ValueError(f"input_norm and T must be positive; got {input_norm}, {T}")
+    if not 0.0 < margin < 1.0:
+        raise ValueError(f"margin must lie in (0, 1); got {margin}")
+    return margin / (BOOST_GROWTH_CONST * input_norm * T)
 
 
 class SO33Activation(nn.Module):
@@ -92,21 +167,34 @@ class SO33Activation(nn.Module):
                                                       under boosts).
                                "eta"               -- divide by
                                                       1 + sqrt(|x . eta . x|+eps).
-                                                      Bounds the eta-magnitude
-                                                      of the input. IS SO(3,3)
-                                                      invariant by construction
-                                                      since x . eta . x is the
-                                                      indefinite-metric invariant.
+                                                      An SO(3,3)-equivariant
+                                                      rescaling (x . eta . x is
+                                                      the indefinite-metric
+                                                      invariant), but NOT a
+                                                      bound: it is the identity
+                                                      on the null cone, and no
+                                                      non-zero equivariant map
+                                                      is bounded.
                              The geodesic ODE under the indefinite metric can
-                             diverge exponentially, which makes the adaptive
-                             solver fail with ``underflow in dt`` on real-data
-                             inputs. ``"euclidean"`` was the original fix; it
-                             trades exact equivariance for stability and is
-                             what breaks the so33_equivariant OOD generalisation
+                             diverge, which makes the adaptive solver fail
+                             with ``underflow in dt`` on real-data inputs.
+                             ``"euclidean"`` was the original fix; it trades
+                             exact equivariance for stability and is what
+                             breaks the so33_equivariant OOD generalisation
                              (the non-invariant denominator propagates into the
-                             eta-invariant readout). ``"eta"`` is the principled
-                             alternative that keeps both stability AND
-                             SO(3,3) equivariance.
+                             eta-invariant readout). For unbounded inputs use
+                             ``connection_cap`` instead.
+    max_input_norm : float or None
+                             Soft cap rescaling only inputs with ||x||_2 above
+                             it (not SO(3,3) invariant). Default None.
+    solver_options : dict or None
+                             Forwarded to torchdiffeq as ``options=``. For a
+                             fixed-grid method (e.g. 'rk4') without a
+                             ``step_size`` the step defaults to T / 10.
+    connection_cap : float   kappa > 0 in omega_eff = kappa * omega / (kappa + ||omega||_F).
+                             Default 1.0. Use ``safe_connection_cap`` to pick a
+                             value with a no-blow-up guarantee for a given
+                             input-norm range.
 
     Input  : (B, 6) tensor — cast to the layer dtype internally.
     Output : (B, 6) tensor in the layer dtype.
@@ -126,6 +214,7 @@ class SO33Activation(nn.Module):
         bound_input: bool | str = False,
         max_input_norm: float | None = None,
         solver_options: dict | None = None,
+        connection_cap: float = 1.0,
     ) -> None:
         super().__init__()
 
@@ -142,6 +231,15 @@ class SO33Activation(nn.Module):
                 f"bound_input must be bool or one of "
                 f"'none'/'euclidean'/'eta'; got {bound_input!r}"
             )
+        if not connection_cap > 0.0:
+            raise ValueError(f"connection_cap must be positive; got {connection_cap}")
+
+        solver_options = dict(solver_options) if solver_options else None
+        if method in _FIXED_GRID_METHODS and not (
+                solver_options and ("step_size" in solver_options
+                                    or "grid_constructor" in solver_options)):
+            # Without a step the fixed-grid solver takes ONE step over [0, T].
+            solver_options = dict(solver_options or {}, step_size=T / 10.0)
 
         self.T              = T
         self.rtol           = rtol
@@ -153,7 +251,8 @@ class SO33Activation(nn.Module):
         self.signature_only = signature_only
         self.bound_input    = bound_mode
         self.max_input_norm = max_input_norm
-        self.solver_options = dict(solver_options) if solver_options else None
+        self.solver_options = solver_options
+        self.connection_cap = float(connection_cap)
 
         # ── Fixed basis (non-trainable, moves with .to(device)) ───────────────
         basis = get_basis_stack(dtype=dtype, signature_only=signature_only)
@@ -175,18 +274,34 @@ class SO33Activation(nn.Module):
 
     # ── Stability helpers ─────────────────────────────────────────────────────
 
-    def _adaptive_scale(self) -> float:
-        """Compute 1 / (1 + ||omega||_F) to bound the effective connection."""
+    def _adaptive_scale(self, omega: torch.Tensor) -> torch.Tensor:
+        """kappa / (kappa + ||omega||_F), differentiable in the coefficients.
+
+        torch.linalg.vector_norm has a zero (sub)gradient at omega = 0, so
+        the scale stays differentiable when the connection vanishes.
+        """
+        kappa = self.connection_cap
+        return kappa / (kappa + torch.linalg.vector_norm(omega))
+
+    def effective_connection(self) -> torch.Tensor:
+        """The (6, 6, 6) connection the ODE integrates, with the norm cap applied."""
+        omega = get_connection_tensor(self.coeffs, self.basis_stack)
+        return omega * self._adaptive_scale(omega)
+
+    def coeff_norm(self) -> float:
+        """||c||_2 of the raw connection coefficients."""
+        return float(self.coeffs.detach().norm().item())
+
+    def effective_connection_norm(self) -> float:
+        """||omega_eff||_F (always < connection_cap)."""
         with torch.no_grad():
-            omega = get_connection_tensor(self.coeffs, self.basis_stack)
-            frob  = omega.norm(p="fro").item()
-        return 1.0 / (1.0 + frob)
+            return float(torch.linalg.vector_norm(self.effective_connection()).item())
 
     def regularization_loss(self) -> torch.Tensor:
         """Frobenius regularisation: L_reg = reg_coef * ||omega||_F^2.
 
-        Add this term to the training loss to prevent trajectories from
-        diverging under the indefinite pseudo-Euclidean metric.
+        Acts on the raw (uncapped) connection. Add this term to the training
+        loss to keep the coefficients small.
         """
         omega = get_connection_tensor(self.coeffs, self.basis_stack)
         return self.reg_coef * omega.pow(2).sum()
@@ -216,13 +331,12 @@ class SO33Activation(nn.Module):
             x_norm = x.norm(dim=-1, keepdim=True)
             x = x / (1.0 + x_norm)
         elif self.bound_input == "eta":
-            # Eta-norm bound. x . eta . x is the SO(3,3) invariant of x,
-            # so dividing by 1 + sqrt(|x . eta . x|) preserves equivariance
-            # exactly: act(g x) = g act(x) for any g in SO(3,3). For
-            # spacelike vectors (x . eta . x > 0) sqrt(...) acts directly;
-            # for timelike vectors (x . eta . x < 0) the abs() takes the
-            # proper-mass magnitude. The 1e-12 eps guards null vectors
-            # (x . eta . x = 0) and keeps the gradient finite at the origin.
+            # Eta-norm rescaling. x . eta . x is the SO(3,3) invariant of x,
+            # so dividing by 1 + sqrt(|x . eta . x|) commutes with the group:
+            # bound(g x) = g bound(x) for any g in SO(3,3). It does NOT bound
+            # the input: for null vectors (x . eta . x = 0, e.g. massless
+            # four-momenta) the divisor is 1. The 1e-12 eps keeps the
+            # gradient finite at the origin.
             inner = (x * self.eta_diag * x).sum(dim=-1, keepdim=True)
             eta_norm = (inner.abs() + 1e-12).sqrt()
             x = x / (1.0 + eta_norm)
@@ -236,15 +350,11 @@ class SO33Activation(nn.Module):
             factor = (self.max_input_norm / x_norm.clamp_min(self.max_input_norm))
             x = x * factor
 
-        scale = self._adaptive_scale()
-
-        # Precompute omega once per forward — coeffs are constant during a
+        # Compute omega_eff once per forward — coeffs are constant during a
         # single ODE solve, so reusing the same tensor across solver steps
-        # saves an einsum per step. Autograd still traces back to coeffs
-        # via the non-leaf omega tensor.
-        omega = get_connection_tensor(self.coeffs, self.basis_stack)
-        if scale != 1.0:
-            omega = omega * scale
+        # saves an einsum per step. Autograd (and the adjoint's vjp) traces
+        # back to coeffs through the non-leaf omega_eff, norm cap included.
+        omega = self.effective_connection()
 
         ode_func = ODEFunc(omega=omega)
 
@@ -282,6 +392,8 @@ class SO33Activation(nn.Module):
             flags.append("freeze_coeffs=True")
         if self.dtype != torch.float64:
             flags.append(f"dtype={self.dtype}")
+        if self.connection_cap != 1.0:
+            flags.append(f"connection_cap={self.connection_cap:.4g}")
         extras = (", " + ", ".join(flags)) if flags else ""
         return (
             f"T={self.T}, method={self.method}, "
