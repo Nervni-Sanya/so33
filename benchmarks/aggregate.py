@@ -37,6 +37,18 @@ def _mean_std(xs: list[float]) -> tuple[float, float]:
     return m, math.sqrt(var)
 
 
+def _isnan(x: Any) -> bool:
+    return isinstance(x, float) and math.isnan(x)
+
+
+def is_diverged(r: dict[str, Any]) -> bool:
+    """A run whose model diverged: flagged by the guards, or (older records)
+    a NaN test AUC, which the harness produced from non-finite logits."""
+    tm = r.get("test_metrics", {})
+    return bool(r.get("diverged") or tm.get("diverged")
+                or _isnan(tm.get("test_auc")) or _isnan(r.get("ood_auc")))
+
+
 def load_results(results_dir: pathlib.Path) -> list[dict[str, Any]]:
     return [json.loads(p.read_text(encoding="utf-8"))
             for p in sorted(results_dir.glob("*.json"))]
@@ -154,16 +166,23 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
             out_lines.append("|" + "|".join(["---"] + ["---:"] * (len(header_cells) - 1)) + "|")
 
             rows = []
-            for model, recs in by_model.items():
-                n_params  = recs[0]["n_params"]
+            for model, all_recs in by_model.items():
+                n_params  = all_recs[0]["n_params"]
+                # Diverged seeds are reported as such, never averaged in
+                # (their accuracy is an argmax over NaN logits).
+                recs = [r for r in all_recs if not is_diverged(r)]
+                n_div = len(all_recs) - len(recs)
+                label = (model if n_div == 0
+                         else f"{model} ({n_div}/{len(all_recs)} diverged)")
+                if not recs:
+                    rows.append((label, len(all_recs), n_params, None, None,
+                                 None, None))
+                    continue
                 val_acc   = _mean_std([r["train_metrics"]["final_val_acc"] for r in recs])
                 test_acc  = _mean_std([r["test_metrics"]["test_acc"]       for r in recs])
-                if has_auc:
-                    test_auc = _mean_std([r["test_metrics"]["test_auc"]
-                                          for r in recs
-                                          if r["test_metrics"].get("test_auc") is not None])
-                else:
-                    test_auc = None
+                aucs = [r["test_metrics"]["test_auc"] for r in recs
+                        if r["test_metrics"].get("test_auc") is not None]
+                test_auc = _mean_std(aucs) if (has_auc and aucs) else None
                 # 1/eps_B is inf when a run separates the classes perfectly
                 # at eps_S=0.3; keep only finite values so one such seed does
                 # not turn the mean/std into inf/nan.
@@ -171,15 +190,23 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
                        if r["test_metrics"].get("bg_rej_30") is not None
                        and math.isfinite(r["test_metrics"]["bg_rej_30"])]
                 bg_rej = _mean_std(rej) if rej else None
-                rows.append((model, len(recs), n_params, val_acc, test_acc,
+                rows.append((label, len(all_recs), n_params, val_acc, test_acc,
                              test_auc, bg_rej))
 
             if has_auc:
                 rows.sort(key=lambda r: -(r[5][0] if r[5] else -1))
             else:
-                rows.sort(key=lambda r: -r[4][0])
+                rows.sort(key=lambda r: -(r[4][0] if r[4] else -1))
 
             for model, n, p, v, t, a, rj in rows:
+                if v is None:
+                    cells = [model, str(n), str(p), "—", "—"]
+                    if has_auc:
+                        cells.append("diverged")
+                    if has_rej:
+                        cells.append("—")
+                    out_lines.append("| " + " | ".join(cells) + " |")
+                    continue
                 cells = [model, str(n), str(p),
                          f"{v[0]:.3f}±{v[1]:.3f}",
                          f"{t[0]:.3f}±{t[1]:.3f}"]
@@ -218,6 +245,42 @@ def render_ood(groups: dict[tuple[str, str], list[dict]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_boost_ood(groups: dict[tuple[str, str], list[dict]]) -> str:
+    """Boost-OOD table (Table 1): id / ood AUC and the gap, per model."""
+    rows = []
+    for (exp, model), all_recs in groups.items():
+        if exp != "boost_ood":
+            continue
+        recs = [r for r in all_recs if not is_diverged(r)]
+        n_div = len(all_recs) - len(recs)
+        label = model if n_div == 0 else f"{model} ({n_div}/{len(all_recs)} diverged)"
+        if not recs:
+            rows.append((label, len(all_recs), all_recs[0].get("n_params"), None, None, None))
+            continue
+        rows.append((label, len(all_recs), recs[0].get("n_params"),
+                     _mean_std([r["id_auc"] for r in recs]),
+                     _mean_std([r["ood_auc"] for r in recs]),
+                     _mean_std([r["auc_gap"] for r in recs])))
+    if not rows:
+        return ""
+    rows.sort(key=lambda r: -(r[4][0] if r[4] else -1))
+    lines = [
+        "## boost_ood",
+        "",
+        "| model | n_seeds | params | id AUC | ood AUC | gap |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for model, n, p, i, o, g in rows:
+        if i is None:
+            lines.append(f"| {model} | {n} | {p} | — | diverged | — |")
+            continue
+        lines.append(
+            f"| {model} | {n} | {p} | {i[0]:.3f}±{i[1]:.3f} | "
+            f"{o[0]:.3f}±{o[1]:.3f} | {g[0]:+.3f}±{g[1]:.3f} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results-dir", type=str, default="results")
@@ -245,6 +308,7 @@ def main(argv: list[str] | None = None) -> int:
     parts.append(render_equivariance(groups))
     parts.append(render_dataeff(groups))
     parts.append(render_ood(groups))
+    parts.append(render_boost_ood(groups))
     parts.append(render_tabular(groups))
     out = "\n".join(p for p in parts if p)
 

@@ -21,12 +21,14 @@ BottleneckClassifier.
 
 from __future__ import annotations
 
+import re
 from typing import Callable
 
 import torch
 import torch.nn as nn
 
 from so33 import SO33Activation, SO33Network, BottleneckClassifier
+from so33.activation import safe_connection_cap
 from so33.basis import DIM, ETA
 
 
@@ -51,6 +53,20 @@ def _lift_4to6(p4: torch.Tensor) -> torch.Tensor:
     out[..., 2] = p4[..., 3]
     out[..., 3] = p4[..., 0]
     return out
+
+
+def max_constituent_norm(X: torch.Tensor) -> float:
+    """Largest Euclidean norm of a real constituent in a (B, K, 5) set tensor.
+
+    ``X[..., :4]`` is (E, px, py, pz) and ``X[..., 4]`` the mask. The lift
+    ``_lift_4to6`` only permutes and zero-pads components, so this is also
+    the largest norm an Architecture-B activation sees before its input
+    bound. Used to choose a provably blow-up-free connection cap.
+    """
+    real = X[..., 4] > 0
+    if not bool(real.any()):
+        return 0.0
+    return float(X[..., :4][real].norm(dim=-1).max().item())
 
 
 # Names the factory understands.
@@ -80,6 +96,33 @@ ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS + SET_MODELS
 
 # Default number of parallel SO(3,3) blocks for the "so33_multi" variant.
 SO33_MULTI_CHANNELS = 4
+
+# Natural-width MLPs at an explicit width, e.g. "tanh_mlp_w24" (Adult
+# control at the so33_multi parameter count: 105 -> 24 -> 2 = 2,594 params).
+_WIDTH_MLP = re.compile(r"^(relu|tanh|gelu)_mlp_w([1-9][0-9]*)$")
+_POINTWISE: dict[str, Callable[[], nn.Module]] = {
+    "relu": nn.ReLU, "tanh": nn.Tanh, "gelu": nn.GELU,
+}
+
+
+def parse_width_mlp(name: str) -> tuple[str, int] | None:
+    """("tanh", 24) for "tanh_mlp_w24"; None for any other name."""
+    m = _WIDTH_MLP.match(name)
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def model_family(name: str) -> str:
+    """Result-table family of a model name (the ``family`` JSON field)."""
+    if name in SET_MODELS:
+        return "equivariant_set"
+    if name in NATURAL_MODELS or parse_width_mlp(name) is not None:
+        return "natural_width"
+    return "matched_bottleneck"
+
+
+def is_set_model(name: str) -> bool:
+    """True for models that only accept per-constituent (B, K, 5) input."""
+    return model_family(name) == "equivariant_set"
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -325,17 +368,33 @@ class EquivariantSO33Classifier(nn.Module):
     this:
       1. lifts each 4-momentum to R^{3,3} by deterministic placement
          (``_lift_4to6``), which IS equivariant;
-      2. applies the SO33Activation per particle (empirically equivariant to
-         <0.13% relative error at init, ~3.4% after heavy training);
-      3. reads out only SO(3,3)-INVARIANT scalars built from the activated
-         outputs: per-particle η-norm and pairwise η-inner products with the
-         jet-total vector, pooled per channel;
-      4. classifies the pooled invariants with a small MLP.
+      2. applies ``channels`` independent SO33Activations per particle. The
+         activation is SO(3,3)-equivariant only at c = 0; a learned c != 0
+         breaks equivariance at O(||c||) (there is no non-zero invariant
+         connection), so end-to-end invariance holds exactly only at c = 0
+         and with an equivariant input bound ("none" or "eta");
+      3. reads out three SO(3,3)-invariant scalars per channel:
+           mean_i <h_i, h_i>_eta,  mean_i |<h_i, h_i>_eta|,  <H, H>_eta
+         with H = sum_i h_i the jet total. There are no pairwise products.
+         The flow conserves <h, h>_eta, so the first two features depend
+         only on the input bound, never on c; c enters only through the
+         cross terms of <H, H>_eta. At c = 0 with bound "none",
+         <H, H>_eta = |P|^2 - E^2 = -M_jet^2: a stably trained model is at
+         least a jet-mass tagger;
+      4. classifies the 3 * channels invariants with a 12 -> 32 -> 2 ReLU MLP
+         (542 parameters with 4 channels, 482 trainable with frozen c).
 
-    Multi-channel: each of ``channels`` SO33Activations sees the same
-    lifted input but learns its own connection, contributing independent
-    invariant features for the readout. This is the "test the ODE kernel
-    inside a structurally equivariant frame" architecture.
+    Stability: lifted massless constituents lie on the null cone, where
+    neither bound "none" nor "eta" limits their norm, and the ODE can blow
+    up (see ``so33.activation``). Pass ``input_norm_bound`` (the largest
+    Euclidean norm of a training constituent, see ``max_constituent_norm``)
+    to give every channel the cap ``safe_connection_cap(r, T)``, which
+    provably keeps ||h_i|| <= 2 ||p_i|| for inputs up to that norm and
+    every value of c. The cap is a function of the parameters only, so it
+    adds no breaking of equivariance. With bound "euclidean" inputs already
+    satisfy ||x|| < 1 and the cap is 1 (unchanged). An explicit
+    ``connection_cap`` (also accepted inside ``so33_kwargs``) wins over
+    ``input_norm_bound``.
     """
 
     def __init__(
@@ -349,14 +408,29 @@ class EquivariantSO33Classifier(nn.Module):
         bound_input: bool | str = True,
         head_hidden: int = 32,
         so33_kwargs: dict | None = None,
+        input_norm_bound: float | None = None,
+        connection_cap: float | None = None,
     ) -> None:
         super().__init__()
         self.dtype = dtype
         self.register_buffer("eta", ETA.to(dtype))
-        so33_kwargs = so33_kwargs or {}
+        so33_kwargs = dict(so33_kwargs or {})
+        if connection_cap is None:
+            connection_cap = so33_kwargs.pop("connection_cap", None)
+        else:
+            so33_kwargs.pop("connection_cap", None)
+        if connection_cap is None and input_norm_bound:
+            # Largest norm the ODE can see: ||beta_eta(x)|| <= ||x||, and the
+            # Euclidean bound maps every input inside the unit ball.
+            euclidean = bound_input is True or bound_input == "euclidean"
+            r_in = 1.0 if euclidean else float(input_norm_bound)
+            connection_cap = min(1.0, safe_connection_cap(r_in, T))
+        self.input_norm_bound = input_norm_bound
+        self.connection_cap = 1.0 if connection_cap is None else float(connection_cap)
         self.acts = nn.ModuleList([
             SO33Activation(T=T, adjoint=adjoint, dtype=dtype,
-                           bound_input=bound_input, **so33_kwargs)
+                           bound_input=bound_input,
+                           connection_cap=self.connection_cap, **so33_kwargs)
             for _ in range(channels)
         ])
         # 3 invariants per channel: mean m^2, mean |m|, <jet-total, η jet-total>
@@ -410,13 +484,22 @@ def _build_deepsets(
     so33_kwargs: dict,
     bound_input: bool,
     pool: str,
+    input_norm_bound: float | None = None,
+    connection_cap: float | None = None,
 ) -> nn.Module:
-    """Construct the per-constituent Deep Sets variant for a model name."""
+    """Construct the per-constituent Deep Sets variant for a model name.
+
+    ``input_norm_bound`` / ``connection_cap`` only affect the Architecture-B
+    family (``so33_equivariant*``), whose activations see the lifted
+    constituents directly; see ``EquivariantSO33Classifier``.
+    """
     def make_so33(**extra):
         return SO33Activation(
             T=T, adjoint=adjoint, dtype=dtype,
             bound_input=bound_input, **extra, **so33_kwargs,
         )
+
+    arch_b = dict(input_norm_bound=input_norm_bound, connection_cap=connection_cap)
 
     if name in ("so33", "so33_signature_only", "so33_frozen"):
         act = make_so33(
@@ -442,7 +525,7 @@ def _build_deepsets(
     if name == "so33_equivariant":
         return EquivariantSO33Classifier(
             out_features=out_features, T=T, adjoint=adjoint, dtype=dtype,
-            bound_input=bound_input, so33_kwargs=so33_kwargs,
+            bound_input=bound_input, so33_kwargs=so33_kwargs, **arch_b,
         )
 
     if name == "so33_equivariant_frozen":
@@ -452,7 +535,7 @@ def _build_deepsets(
         return EquivariantSO33Classifier(
             out_features=out_features, T=T, adjoint=adjoint, dtype=dtype,
             bound_input=bound_input,
-            so33_kwargs=dict(so33_kwargs, freeze_coeffs=True),
+            so33_kwargs=dict(so33_kwargs, freeze_coeffs=True), **arch_b,
         )
 
     if name == "so33_equivariant_unbounded":
@@ -460,25 +543,27 @@ def _build_deepsets(
         # bound_input divides by  1 + ||x||_2 , and the Euclidean norm is
         # NOT an SO(3,3) invariant -- boosted inputs are scaled by a
         # different factor, so the activation loses equivariance with
-        # input rapidity. Removing the bound restores exact equivariance
-        # at the risk of geodesic blow-up; if OOD AUC recovers, the
-        # bound is confirmed as the cause.
+        # input rapidity. Removing the bound removes that source of
+        # non-equivariance (the flow itself is equivariant only at c = 0)
+        # at the risk of geodesic blow-up, which input_norm_bound /
+        # connection_cap control; if OOD AUC recovers, the bound is
+        # confirmed as the cause.
         return EquivariantSO33Classifier(
             out_features=out_features, T=T, adjoint=adjoint, dtype=dtype,
-            bound_input=False, so33_kwargs=so33_kwargs,
+            bound_input=False, so33_kwargs=so33_kwargs, **arch_b,
         )
 
     if name == "so33_equivariant_eta_bounded":
-        # Principled fix: replace the Euclidean-norm bound with the
-        # eta-norm bound  x / (1 + sqrt(|x . eta . x|)). This is
-        # SO(3,3)-invariant by construction (x . eta . x is the
-        # indefinite-metric invariant), so equivariance is preserved
-        # exactly while the input is still bounded for ODE stability on
-        # real-data settings (HIGGS, top tagging) where the unbounded
-        # variant diverges.
+        # Replace the Euclidean-norm bound with the eta-norm rescaling
+        # x / (1 + sqrt(|x . eta . x|)). It commutes with SO(3,3)
+        # (x . eta . x is the indefinite-metric invariant), so it adds no
+        # breaking of equivariance. It is NOT a bound: no non-zero
+        # equivariant map is bounded, and on the null cone (massless
+        # constituents) it is the identity, so on top tagging this variant
+        # behaves like _unbounded and needs the connection cap for stability.
         return EquivariantSO33Classifier(
             out_features=out_features, T=T, adjoint=adjoint, dtype=dtype,
-            bound_input="eta", so33_kwargs=so33_kwargs,
+            bound_input="eta", so33_kwargs=so33_kwargs, **arch_b,
         )
 
     pointwise: dict[str, Callable[[], nn.Module]] = {
@@ -491,6 +576,13 @@ def _build_deepsets(
         return DeepSetsClassifier(
             activation=pointwise[name](), out_features=out_features,
             in_features=in_features, hidden=hidden, dtype=dtype, pool=pool,
+        )
+    width_mlp = parse_width_mlp(name)
+    if width_mlp is not None:
+        act_name, width = width_mlp
+        return DeepSetsClassifier(
+            activation=_POINTWISE[act_name](), out_features=out_features,
+            in_features=in_features, hidden=width, dtype=dtype, pool=pool,
         )
 
     raise ValueError(f"Unknown model name: {name!r}. Known: {ALL_MODELS}")
@@ -511,6 +603,8 @@ def build_model(
     bound_input: bool | None = None,
     max_input_norm: float | None = 8.0,
     pool: str = "mean",
+    input_norm_bound: float | None = None,
+    connection_cap: float | None = None,
 ) -> nn.Module:
     """Construct a model by string name.
 
@@ -530,6 +624,11 @@ def build_model(
     representation : "flat" (default; input is (B, in_features)) or
                   "constituents" (input is (B, K, 5) — a Deep Sets model
                   applies the activation per particle then masked-pools).
+    input_norm_bound : Architecture B only — largest Euclidean norm of a
+                  training constituent (``max_constituent_norm``); sets a
+                  provably blow-up-free connection cap per channel.
+    connection_cap : Architecture B only — explicit cap (overrides
+                  ``input_norm_bound``); None keeps the default 1.0.
 
     Returns
     -------
@@ -562,6 +661,7 @@ def build_model(
             T=T, adjoint=adjoint, dtype=dtype,
             natural_hidden=natural_hidden, so33_kwargs=so33_kwargs,
             bound_input=bound_input, pool=pool,
+            input_norm_bound=input_norm_bound, connection_cap=connection_cap,
         )
 
     # Flat real-data path: when bound_input is off (which it is by default,
@@ -617,10 +717,17 @@ def build_model(
             in_features=in_features, out_features=out_features,
             activation=act, hidden=natural_hidden, dtype=dtype,
         )
+    width_mlp = parse_width_mlp(name)
+    if width_mlp is not None:
+        act_name, width = width_mlp
+        return NaturalWidthMLP(
+            in_features=in_features, out_features=out_features,
+            activation=_POINTWISE[act_name](), hidden=width, dtype=dtype,
+        )
 
     raise ValueError(
         f"Unknown model name: {name!r}. "
-        f"Known: {ALL_MODELS}"
+        f"Known: {ALL_MODELS} or <relu|tanh|gelu>_mlp_w<width>"
     )
 
 

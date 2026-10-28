@@ -295,3 +295,116 @@ def boost_split(
     low_mask  = norm <= threshold
     high_mask = ~low_mask
     return (X[low_mask], y[low_mask]), (X[high_mask], y[high_mask])
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Toy massless-constituent jets (stability checks; not a physics simulation)
+# ─────────────────────────────────────────────────────────────────────────
+
+def _rambo_massless(n: int, mass: float, rng: np.random.Generator,
+                    alpha: float) -> tuple[np.ndarray, np.ndarray]:
+    """n massless momenta with total four-momentum (mass, 0, 0, 0).
+
+    RAMBO's conformal map applied to isotropic momenta whose energies are
+    Pareto(alpha)-distributed, which gives the heavy-tailed energy sharing
+    (a few hard constituents, many soft ones) of real jets.
+    """
+    c = 2.0 * rng.random(n) - 1.0
+    phi = 2.0 * np.pi * rng.random(n)
+    q0 = (1.0 - rng.random(n)) ** (-1.0 / alpha)
+    s = np.sqrt(1.0 - c * c)
+    q = np.stack([q0 * s * np.cos(phi), q0 * s * np.sin(phi), q0 * c], axis=1)
+    Q0, Qv = q0.sum(), q.sum(axis=0)
+    MQ = np.sqrt(max(Q0 * Q0 - Qv @ Qv, 1e-300))
+    b = -Qv / MQ
+    x = mass / MQ
+    g = Q0 / MQ
+    a = 1.0 / (1.0 + g)
+    bq = q @ b
+    p0 = x * (g * q0 + bq)
+    pv = x * (q + np.outer(q0, b) + a * np.outer(bq, b))
+    return p0, pv
+
+
+def _boost_to(p0: np.ndarray, pv: np.ndarray,
+              beta: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Boost four-momenta (p0, pv) by velocity beta."""
+    b2 = float(beta @ beta)
+    if b2 <= 0.0:
+        return p0, pv
+    gam = 1.0 / np.sqrt(1.0 - b2)
+    bp = pv @ beta
+    p0n = gam * (p0 + bp)
+    pvn = pv + np.outer((gam - 1.0) * bp / b2 + gam * p0, beta)
+    return p0n, pvn
+
+
+def generate_massless_jets(
+    n_jets: int = 10_000,
+    n_constituents: int = 32,
+    seed: int = 0,
+    pt_range: Tuple[float, float] = (550.0, 650.0),
+    eta_max: float = 2.0,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Toy top / QCD jets made of massless constituents, in GeV.
+
+    Not a physics simulation: it only reproduces the properties that
+    matter for the numerical stability of the per-constituent models —
+    exactly massless constituents (lifted to the null cone of R^{3,3}),
+    jet pT 550-650 GeV and |eta| < 2 as in the Kasieczka sample, and a
+    heavy-tailed constituent energy spectrum, so that after global RMS
+    scaling the constituent norms have a median below 1 and a tail of
+    order 50. Signal jets have mass ~ N(172.5, 10) GeV and 30-60
+    constituents, background jets a log-normal mass around 60 GeV and
+    15-45 constituents. The leading ``n_constituents`` by pT are kept and
+    zero-padded.
+
+    Returns
+    -------
+    X : (n_jets, n_constituents, 4) float64 tensor of (E, px, py, pz).
+    y : (n_jets,) long tensor, 1 = top-like, 0 = QCD-like.
+    """
+    rng = np.random.default_rng(seed)
+    X = np.zeros((n_jets, n_constituents, 4))
+    y = (rng.random(n_jets) < 0.5).astype(np.int64)
+    for i in range(n_jets):
+        if y[i]:
+            mass = max(rng.normal(172.5, 10.0), 120.0)
+            n, alpha = int(rng.integers(30, 61)), 2.0
+        else:
+            mass = float(np.clip(rng.lognormal(np.log(60.0), 0.5), 10.0, 300.0))
+            n, alpha = int(rng.integers(15, 46)), 1.3
+        p0, pv = _rambo_massless(n, mass, rng, alpha)
+        pt = rng.uniform(*pt_range)
+        eta = rng.uniform(-eta_max, eta_max)
+        phi = rng.uniform(-np.pi, np.pi)
+        P = np.array([pt * np.cos(phi), pt * np.sin(phi), pt * np.sinh(eta)])
+        E = np.sqrt(mass * mass + P @ P)
+        p0, pv = _boost_to(p0, pv, P / E)
+        order = np.argsort(-np.hypot(pv[:, 0], pv[:, 1]))[:n_constituents]
+        m = len(order)
+        X[i, :m, 0] = p0[order]
+        X[i, :m, 1:] = pv[order]
+    return torch.from_numpy(X), torch.from_numpy(y)
+
+
+def massless_jet_split(n_jets: int = 20_000, n_constituents: int = 32,
+                       seed: int = 0):
+    """Toy jets as a globally RMS-normalised 70/15/15 DatasetSplit.
+
+    Same packing and normalisation as ``load_top_tagging_constituents``
+    (``normalize="global"``): (n, K, 5) = (E, px, py, pz) / train RMS + mask.
+    """
+    from benchmarks.datasets import DatasetSplit
+    X, y = generate_massless_jets(n_jets, n_constituents, seed=seed)
+    mask = (X.abs().sum(dim=-1) > 0).to(X.dtype)
+    n_tr, n_va = int(0.7 * n_jets), int(0.15 * n_jets)
+    scale = X[:n_tr][mask[:n_tr].bool()].pow(2).mean().sqrt()
+    packed = torch.cat([X / scale * mask.unsqueeze(-1), mask.unsqueeze(-1)], dim=-1)
+    return DatasetSplit(
+        X_train=packed[:n_tr], y_train=y[:n_tr],
+        X_val=packed[n_tr:n_tr + n_va], y_val=y[n_tr:n_tr + n_va],
+        X_test=packed[n_tr + n_va:], y_test=y[n_tr + n_va:],
+        name=f"toy_massless_jets(k={n_constituents},norm=global)",
+        n_features=4, n_classes=2,
+    )
