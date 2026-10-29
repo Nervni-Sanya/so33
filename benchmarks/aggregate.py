@@ -137,7 +137,8 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
         records = tabular_experiments[exp]
         out_lines.append(f"## {exp}")
         out_lines.append("")
-        for family in ("matched_bottleneck", "natural_width", "equivariant_set"):
+        for family in ("matched_bottleneck", "natural_width", "equivariant_set",
+                       "baseline_set", "jet_observable"):
             family_recs = [r for r in records if r["family"] == family]
             if not family_recs:
                 continue
@@ -154,6 +155,8 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
                 "matched_bottleneck": "matched bottleneck (hidden=6)",
                 "natural_width": "natural width MLPs",
                 "equivariant_set": "equivariant / invariant set models",
+                "baseline_set": "published-tagger baselines (~5k params)",
+                "jet_observable": "jet observables (no constituent network)",
             }[family]
             out_lines.append(f"### {label}")
             out_lines.append("")
@@ -199,15 +202,16 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
                 rows.sort(key=lambda r: -(r[4][0] if r[4] else -1))
 
             for model, n, p, v, t, a, rj in rows:
+                p = "—" if p is None else str(p)
                 if v is None:
-                    cells = [model, str(n), str(p), "—", "—"]
+                    cells = [model, str(n), p, "—", "—"]
                     if has_auc:
                         cells.append("diverged")
                     if has_rej:
                         cells.append("—")
                     out_lines.append("| " + " | ".join(cells) + " |")
                     continue
-                cells = [model, str(n), str(p),
+                cells = [model, str(n), p,
                          f"{v[0]:.3f}±{v[1]:.3f}",
                          f"{t[0]:.3f}±{t[1]:.3f}"]
                 if has_auc:

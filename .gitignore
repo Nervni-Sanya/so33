@@ -8,6 +8,8 @@ __pycache__/
 build/
 dist/
 
-# Benchmark outputs
-results/
+# Benchmark outputs. The per-seed JSON records in results/ are meant to be
+# committed with the code that produced them (each carries its git commit);
+# per-sample score / sample arrays are large and go to the Zenodo archive.
+results/**/*.npz
 

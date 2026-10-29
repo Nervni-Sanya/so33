@@ -47,6 +47,29 @@ from .provenance import run_metadata
 from .train import train_classifier, TrainConfig, so33_activations
 
 
+def binary_metrics(scores, y_true) -> dict[str, float]:
+    """AUC and background rejection 1/eps_B at eps_S in {0.3, 0.5}.
+
+    ``scores`` are per-sample signal scores (higher = more signal-like),
+    ``y_true`` the 0/1 labels (numpy arrays or anything array-like). Shared
+    by ``evaluate_test`` and the score-based baselines (jet observables,
+    EFPs). Raises ImportError without scikit-learn.
+    """
+    import numpy as np
+    from sklearn.metrics import roc_auc_score, roc_curve
+    y_true = np.asarray(y_true)
+    scores = np.asarray(scores)
+    out = {"test_auc": float(roc_auc_score(y_true, scores))}
+    fpr, tpr, _ = roc_curve(y_true, scores)   # tpr ascending
+    for eff, key in ((0.3, "bg_rej_30"), (0.5, "bg_rej_50")):
+        # First operating point that reaches the target signal
+        # efficiency; its false-positive rate is eps_B.
+        idx = int((tpr >= eff).argmax())
+        eps_b = float(fpr[idx])
+        out[key] = float("inf") if eps_b <= 0.0 else 1.0 / eps_b
+    return out
+
+
 def evaluate_test(
     model: nn.Module,
     X_test: torch.Tensor,
@@ -95,17 +118,7 @@ def evaluate_test(
     if n_classes == 2:
         scores = torch.softmax(logits, dim=-1)[:, 1].cpu().numpy()
         try:
-            from sklearn.metrics import roc_auc_score, roc_curve
-            y_true = y_test.cpu().numpy()
-            out["test_auc"] = float(roc_auc_score(y_true, scores))
-            # Background rejection 1/eps_B at fixed signal efficiency eps_S.
-            fpr, tpr, _ = roc_curve(y_true, scores)   # tpr ascending
-            for eff, key in ((0.3, "bg_rej_30"), (0.5, "bg_rej_50")):
-                # First operating point that reaches the target signal
-                # efficiency; its false-positive rate is eps_B.
-                idx = int((tpr >= eff).argmax())
-                eps_b = float(fpr[idx])
-                out[key] = float("inf") if eps_b <= 0.0 else 1.0 / eps_b
+            out.update(binary_metrics(scores, y_test.cpu().numpy()))
         except ImportError:
             warnings.warn(
                 "scikit-learn is not installed: test_auc and bg_rej_* are "
@@ -346,6 +359,8 @@ def _print_summary(experiment: str, summary: list[dict]) -> None:
     matched = [r for r in summary if r["family"] == "matched_bottleneck"]
     natural = [r for r in summary if r["family"] == "natural_width"]
     equivariant = [r for r in summary if r["family"] == "equivariant_set"]
+    baselines = [r for r in summary if r["family"] == "baseline_set"]
     fmt_table(matched, "matched bottleneck (hidden=6)")
     fmt_table(natural, "natural width MLPs")
     fmt_table(equivariant, "equivariant / invariant set models")
+    fmt_table(baselines, "published-tagger baselines (~5k params)")

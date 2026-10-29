@@ -92,7 +92,14 @@ SET_MODELS = (
     "so33_equivariant_unbounded",    # Arch B with bound_input=False
     "so33_equivariant_eta_bounded",  # Arch B with eta-invariant input bound
 )
-ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS + SET_MODELS
+BASELINE_SET_MODELS = (
+    # Published per-constituent taggers at ~5k parameters, trained under the
+    # identical protocol (constituents representation only).
+    "pfn",                 # Particle Flow Network (benchmarks/pfn.py)
+    "efn",                 # Energy Flow Network   (benchmarks/pfn.py)
+    "lorentznet",          # LorentzNet            (benchmarks/lorentznet.py)
+)
+ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS + SET_MODELS + BASELINE_SET_MODELS
 
 # Default number of parallel SO(3,3) blocks for the "so33_multi" variant.
 SO33_MULTI_CHANNELS = 4
@@ -115,6 +122,8 @@ def model_family(name: str) -> str:
     """Result-table family of a model name (the ``family`` JSON field)."""
     if name in SET_MODELS:
         return "equivariant_set"
+    if name in BASELINE_SET_MODELS:
+        return "baseline_set"
     if name in NATURAL_MODELS or parse_width_mlp(name) is not None:
         return "natural_width"
     return "matched_bottleneck"
@@ -122,7 +131,22 @@ def model_family(name: str) -> str:
 
 def is_set_model(name: str) -> bool:
     """True for models that only accept per-constituent (B, K, 5) input."""
-    return model_family(name) == "equivariant_set"
+    return model_family(name) in ("equivariant_set", "baseline_set")
+
+
+def _build_baseline_set(name: str, out_features: int, dtype: torch.dtype) -> nn.Module:
+    """The published-tagger baselines, imported lazily (benchmarks/pfn.py,
+    benchmarks/lorentznet.py)."""
+    if name == "pfn":
+        from .pfn import ParticleFlowNetwork
+        return ParticleFlowNetwork(out_features=out_features, dtype=dtype)
+    if name == "efn":
+        from .pfn import EnergyFlowNetwork
+        return EnergyFlowNetwork(out_features=out_features, dtype=dtype)
+    if name == "lorentznet":
+        from .lorentznet import LorentzNet
+        return LorentzNet(out_features=out_features, dtype=dtype)
+    raise ValueError(f"not a baseline set model: {name!r}")
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -521,6 +545,9 @@ def _build_deepsets(
 
     if name == "eta_invariants":
         return EtaInvariantsClassifier(out_features=out_features, dtype=dtype)
+
+    if name in BASELINE_SET_MODELS:
+        return _build_baseline_set(name, out_features, dtype)
 
     if name == "so33_equivariant":
         return EquivariantSO33Classifier(
