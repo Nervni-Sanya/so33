@@ -13,7 +13,9 @@ Verifies, against energyflow (the EFP tests skip without it):
   • The EFPs are invariant under longitudinal boosts, rotations about the beam
     and a global rescaling of the momenta (so the loader's normalisation does
     not matter), and do change under a transverse boost.
-  • batch_compute with a process pool and in chunks equals the serial result.
+  • Only real constituents (mask > 0, pT > 0) enter; an empty jet gives
+    all-zero EFPs; batch_compute with a process pool and in chunks equals the
+    serial result.
   • The accuracy threshold maximises val accuracy and never splits tied
     scores.
   • Experiment / model names follow run_top_tagging's rule for the same data
@@ -188,14 +190,27 @@ def test_efps_are_invariant_under_longitudinal_boosts_and_rotations(ef):
     assert np.max(np.abs(moved - F0) / np.abs(F0)) > 1e-2
 
 
+def test_jets_to_events_keeps_real_constituents_only():
+    X = np.zeros((2, 4, 5))
+    X[0, 0] = [100.0, 60.0, 80.0, 0.0, 1.0]
+    X[0, 1] = [50.0, -30.0, 40.0, 0.0, 1.0]
+    X[0, 2] = [5.0, 0.0, 0.0, 5.0, 1.0]          # pT = 0: z = 0, y infinite
+    events = efp.jets_to_events(X)                # jet 1 has no constituents
+    assert [e.shape for e in events] == [(2, 3), (0, 3)]
+    np.testing.assert_allclose(events[0][:, 0], [100.0, 50.0])
+    assert efp.jets_to_events(np.zeros((0, 4, 5))) == []
+
+
 def test_parallel_and_chunked_batch_compute_match_serial(ef):
     X = efp.toy_jet_split(40, 32, seed=5).X_train.numpy()      # 28 jets
+    X = np.concatenate([X, np.zeros((1, 32, 5))])              # + an empty jet
     efpset = efp.make_efpset(3, 0.5)
     serial = efp.compute_efps(X, efpset)
-    # chunks of 9 leave a one-jet chunk, which batch_compute returns 1-D
-    np.testing.assert_array_equal(efp.compute_efps(X, efpset, chunk=9), serial)
+    assert np.isfinite(serial).all() and not serial[-1].any()  # empty -> zeros
+    # chunks of 7 leave a one-jet chunk, which batch_compute returns 1-D
+    np.testing.assert_array_equal(efp.compute_efps(X, efpset, chunk=7), serial)
     np.testing.assert_array_equal(
-        efp.compute_efps(X, efpset, n_jobs=2, chunk=9), serial)
+        efp.compute_efps(X, efpset, n_jobs=2, chunk=7), serial)
 
 
 def test_best_threshold_maximises_validation_accuracy():

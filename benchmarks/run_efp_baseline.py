@@ -144,6 +144,8 @@ def jets_to_events(X: np.ndarray) -> list[np.ndarray]:
     rapidity is infinite, so it is removed rather than converted.
     """
     X = np.asarray(X)
+    if len(X) == 0:
+        return []
     p4 = X[..., :4].astype(np.float64)
     pt = np.hypot(p4[..., 1], p4[..., 2])
     keep = (X[..., 4] > 0) & (pt > 0)
@@ -269,8 +271,9 @@ def efp_features(split: DatasetSplit, dmax: int, beta: float, n_jobs: int = 1,
                  for name, X in (("train", split.X_train), ("val", split.X_val),
                                  ("test", split.X_test))]
         if path is not None:
-            save_efp_cache(path, feats, specs, {**key, "dmax": int(dmax),
-                                                "energyflow": import_energyflow().__version__})
+            version = import_energyflow().__version__
+            save_efp_cache(path, feats, specs,
+                           {**key, "dmax": int(dmax), "energyflow": version})
             print(f"[{label}] EFPs cached in {path}")
     for name, F in zip(("train", "val", "test"), feats):
         n_bad = int((~np.isfinite(F)).any(axis=1).sum())
