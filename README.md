@@ -8,9 +8,9 @@
 A neural-network activation defined as the time-`T` solution of a **geodesic-like
 ODE on the pseudo-Euclidean space ℝ³˒³** (signature +,+,+,−,−,−) with a learnable
 `so(3,3)` connection. Unlike ReLU/Tanh and other elementwise functions, the layer
-is a structured nonlinear flow that respects the indefinite (Lorentz-like) metric,
-and it can be assembled into architectures that are exactly or approximately
-invariant under SO(3,3) transformations.
+is a structured nonlinear flow that conserves the indefinite (Lorentz-like) norm
+⟨v,v⟩_η, and it can be assembled into architectures whose readout is SO(3,3)
+invariant.
 
 This repository contains the activation, two end-to-end architectures built on it,
 a benchmark harness, and the source of an accompanying preprint
@@ -21,34 +21,52 @@ a benchmark harness, and the source of an accompanying preprint
 - **`so33/`** — the core: `SO33Activation` (the geodesic ODE layer), the 15-generator
   `so(3,3)` basis, and convenience wrappers (`SO33Network`, `BottleneckClassifier`).
 - **`benchmarks/`** — datasets, models, the training loop, and runnable experiments
-  (synthetic boost-OOD, HIGGS, Adult, top-tagging constituents).
+  (synthetic boost-OOD, HIGGS, Adult, top-tagging constituents), the published-tagger
+  and jet-observable baselines, statistics and figure scripts.
 - **`paper/`** — the preprint (`main.tex`), figures, and the annotated result notes.
-- **`tests/`** — 26 tests covering the basis, forward/adjoint consistency,
-  regularization, training, the ablation/dtype variants, and the canonical
-  top-tagging loader, background-rejection metric and result aggregation.
+- **`tests/`** — 103 tests: the basis, gradients against finite differences at the
+  experimental solver settings, conservation vs. equivariance, the input maps, RK4
+  convergence order, the stability guarantee, the training/evaluation divergence
+  guards, the published parameter counts, the data loaders, metrics, result records
+  and statistics.
 
-## Key findings
+## Corrections (October 2026)
 
-The project is a controlled study of *when* an SO(3,3) inductive bias helps. The
-honest summary (full numbers and caveats in [`paper/`](paper/)):
+A referee audit found defects that change how earlier results must be read. They
+are fixed in the code; the affected experiments have to be re-run.
+
+- **Gradient bug.** The adaptive scale ω → ω/(1+‖ω‖_F) was evaluated without
+  gradient, so training ignored its derivative (autograd vs. finite differences:
+  0.3–4% error). It is now differentiable. The *forward* map is unchanged
+  (the equivariance CSV reproduces byte for byte); every *trained* SO33 number
+  can change slightly.
+- **Architecture B on top tagging diverged** (test AUC NaN), it was not "at
+  chance". Lifted massless constituents lie on the null cone, where neither the
+  η rescaling nor any equivariant input map bounds their norm, and with the old
+  cap the ODE overflows once ‖c‖ ≈ 0.1. A provable connection cap now prevents it
+  (see *Stability* below).
+- **What the top-tagging readout learns.** Constituents are massless, and a
+  zero-parameter jet-mass window on the same 32 constituents reaches AUC 0.941;
+  `eta_invariants` (0.948) approximately learns that window. The pairwise term is
+  not the mechanism.
+- **β_η is a rescaling, not a bound**, and the flow is SO(3,3)-equivariant only at
+  c = 0. A readout of ⟨σ(x),σ(x)⟩_η cannot see the connection (the flow conserves
+  it), so ε_σ — not ε_m — is the equivariance measure (`figure_equivariance`).
+- **Result files** of runs that differed only in, e.g., the constituent
+  normalisation overwrote each other. Non-default options are now part of the
+  experiment name.
+
+## Key findings (to be re-run on the corrected code)
 
 | Result | Setting | Takeaway |
 |--------|---------|----------|
-| **Perfect OOD generalization** | Synthetic boost-OOD, train rapidity ≤0.6, test ≤2.5 | The structurally invariant `eta_invariants` reaches **OOD AUC 1.000 ± 0.000** (3 seeds), while a relu MLP degrades to 0.944 ± 0.004. |
-| **A diagnosed-and-fixed equivariance bug** | Same task, architecture B | The default `so33_equivariant` collapses to **0.663 ± 0.001** because a Euclidean-norm input bound (added for ODE stability) is *not* SO(3,3)-invariant. An **η-invariant bound** `1+√\|xᵀηx\|` restores it to **1.000** (invariance error 1.4e-15 vs 1.4e-1). |
-| **Parameter efficiency** | Adult (natural width) | `so33_multi` reaches **AUC 0.912 ± 0.002** with ~2.7k params, above the best 10×-larger MLP (0.905 ± 0.001). |
-| **Invariant readout vs baselines** | Top tagging, **canonical Kasieczka protocol** (full 404k test set) | `eta_invariants` (4.8k params, 32 leading constituents) reaches **AUC 0.948** (identical across 3 seeds), **+0.193 AUC** and 6× background rejection over a non-invariant baseline trained under the identical protocol (0.755 / 1-εB=8). |
+| **Boost-OOD sanity check** | Synthetic single particles (K=1), train rapidity ≤0.6, test ≤2.5 | `eta_invariants` reaches OOD AUC 1.000 by construction (it reads m² directly); a relu MLP degrades to 0.944 ± 0.004. |
+| **Non-invariant input bound** | Same task, architecture B | With the Euclidean bound ÷(1+‖x‖₂) the readout ⟨β(x),β(x)⟩_η depends on rapidity and OOD AUC falls to 0.663 ± 0.001; the η rescaling — or no bound — gives 1.000. With K=1 the connection gets no gradient (c → 0), so this tests the input map, not the flow. |
+| **Top tagging, canonical protocol** | Full 404k test set, 32 leading constituents | `eta_invariants` (4.8k params) AUC 0.948, 1/ε_B ≈ 50; a zero-parameter mass window gives 0.941 / 40. Baselines under the identical protocol: jet mass / mass window / BDT on (M, τ₃₂), linear EFPs, PFN/EFN and LorentzNet at ~5k parameters. |
+| **Tabular data** | HIGGS, Adult at width 6 | The activations are statistically indistinguishable on HIGGS at n = 3 (Welch p ≈ 0.27); on Adult the small width-6 models already beat the unregularised width-256 MLPs, so `so33_multi` (0.912) is not evidence of an inductive bias. |
 
-> ⚠️ **No SOTA claim.** On the same canonical protocol, dedicated Lorentz-equivariant
-> taggers (LorentzNet, PELICAN) reach AUC ≈ 0.987 with background rejections in the
-> thousands — far ahead of us, and we say so plainly in the paper. The contribution
-> is the within-weight-class comparison: a tiny invariant readout strongly
-> outperforms a non-invariant baseline of the same setup, now measured directly on
-> the published test split.
-
-Honest negatives are reported too: on full-width HIGGS, standard MLPs win
-(0.805 vs 0.783 AUC), and architecture B is at chance on top tagging because its
-readout omits the pairwise η-inner-product term.
+> ⚠️ **No SOTA claim.** Dedicated Lorentz-equivariant taggers (LorentzNet, PELICAN)
+> reach AUC ≈ 0.987 with background rejections in the thousands on the same test set.
 
 ## Quick start
 
@@ -59,24 +77,25 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-To run the benchmarks, add the extras (`scikit-learn` is needed for AUC and
-background rejection; the rest is for the top-tagging download):
+To run the benchmarks, add the extras (`scikit-learn` and `scipy` are needed for AUC,
+background rejection and statistics; the rest is for the top-tagging download):
 
 ```bash
 pip install -e ".[bench]"
+pip install energyflow      # only for the linear-EFP baseline
 ```
 
 ```python
 import torch
 from so33 import SO33Activation, SO33Network
 
-# The geodesic ODE activation on R^{3,3}.
-act = SO33Activation(T=0.5, adjoint=True)
+# The geodesic ODE activation on R^{3,3}, with the integrator used in the experiments.
+act = SO33Activation(T=0.3, method="rk4", solver_options={"step_size": 0.03})
 x   = torch.randn(8, 6, dtype=torch.float64)
 y   = act(x)                       # (8, 6)
 
 # A small classifier built on top of it.
-net    = SO33Network(in_features=6, out_features=2, T=0.5)
+net    = SO33Network(in_features=6, out_features=2, T=0.3, method="rk4")
 logits = net(x)                    # (8, 2)
 ```
 
@@ -92,64 +111,77 @@ torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
 
 | Parameter | Type | Default | Description |
 |-----------|------|:-------:|-------------|
-| `T` | `float` | `1.0` | ODE integration horizon. Smaller `T` → closer to the identity/linear regime. |
-| `method` | `str` | `"dopri5"` | ODE solver: `"dopri5"`, `"rk4"`, `"euler"`. The benchmarks use fixed-step `"rk4"`. |
-| `adjoint` | `bool` | `True` | Adjoint backprop (O(1) memory). `False` for direct autograd / debugging. |
-| `bound_input` | `bool \| str` | `False` | Input bound for ODE stability: `False`/`"none"`, `True`/`"euclidean"` (÷`1+‖x‖₂`, **not** SO(3,3)-invariant), or `"eta"` (÷`1+√\|xᵀηx\|`, **SO(3,3)-invariant**). See the finding above. |
-| `signature_only` | `bool` | `False` | Restrict to the 6 compact generators (so(3)⊕so(3) Euclidean ablation). |
-| `freeze_coeffs` | `bool` | `False` | Freeze the 15 connection coefficients at init (isolates *learning* the connection). |
+| `T` | `float` | `1.0` | ODE integration horizon (the experiments use 0.3). |
+| `method` | `str` | `"dopri5"` | ODE solver: `"dopri5"`, `"rk4"`, `"euler"`. The experiments use fixed-step `"rk4"`; a fixed-grid method without a `step_size` uses T/10 (it used to take a single step). |
+| `adjoint` | `bool` | `True` | Adjoint backprop (O(1) memory). `False` for direct autograd. Both agree with finite differences to ~1e-9. |
+| `connection_cap` | `float` | `1.0` | κ in ω_eff = κω/(κ+‖ω‖_F), so ‖ω_eff‖_F < κ. Use `so33.safe_connection_cap(r, T)` for a no-blow-up guarantee on inputs with ‖x‖₂ ≤ r. |
+| `bound_input` | `bool \| str` | `False` | Input map: `False`/`"none"`, `True`/`"euclidean"` (÷`1+‖x‖₂`: bounded, **not** SO(3,3)-invariant), or `"eta"` (÷`1+√\|xᵀηx\|`: commutes with SO(3,3) but is the identity on the null cone, i.e. **not** a bound). |
+| `signature_only` | `bool` | `False` | Restrict to the 6 compact generators (so(3)⊕so(3) Euclidean ablation; preserves ‖v‖₂, never blows up). |
+| `freeze_coeffs` | `bool` | `False` | Freeze the 15 connection coefficients at init. |
 | `max_input_norm` | `float \| None` | `None` | Soft norm cap (rescales only outliers); used on the flat tabular paths. |
 | `rtol` / `atol` | `float` | `1e-4` / `1e-5` | Adaptive-solver tolerances. |
-| `reg_coef` | `float` | `1e-3` | Frobenius penalty on the connection tensor (add `regularization_loss()` to the loss). |
+| `reg_coef` | `float` | `1e-3` | Frobenius penalty on the raw connection (add `regularization_loss()` to the loss). |
+
+**Stability.** Rotations preserve ‖v‖₂; boosts give d‖v‖/dt ≤ 4/(3√6)·‖ω_eff‖_F·‖v‖²
+(sharp), so the flow can blow up before T once that factor times ‖x‖·T reaches 1.
+`safe_connection_cap(r, T, margin=0.5)` keeps every input with ‖x‖₂ ≤ r below 2r for
+every value of the coefficients — a cap on the parameters, so it adds no breaking of
+equivariance.
 
 ## Architectures (in `benchmarks/models.py`)
 
-- **`eta_invariants`** (Arch A) — parameter-free lift `(E,p)→ℝ³˒³`, then a readout of
-  *only* SO(3,3) invariants (per-particle η-norms and **pairwise** η-inner products).
-  Exactly invariant by construction; no ODE activation.
-- **`so33_equivariant`** (Arch B) — same lift, then the SO33 geodesic activation per
-  particle, then an invariant readout. End-to-end invariance is *conditional* on the
-  activation's equivariance — which is exactly what the input-bound choice controls.
-  Variants: `so33_equivariant_unbounded`, `so33_equivariant_eta_bounded` (the fix),
-  `so33_equivariant_frozen` (ablation).
+- **`eta_invariants`** (Arch A) — parameter-free lift `(E,p)→(p,E,0,0)`, then seven
+  pooled SO(3,3) invariants (per-particle η-norms, pairwise η-products, the jet
+  total's η-norm) into a 7–64–64–2 ReLU MLP (4,802 parameters). No ODE.
+- **`so33_equivariant`** (Arch B) — same lift, four SO33 activation channels per
+  particle, then per channel the mean η-norm, mean |η-norm| and the jet total's
+  η-norm (= −M²_jet at c = 0) into a 12–32–2 head (542 parameters). Variants:
+  `_unbounded`, `_eta_bounded`, `_frozen`. On per-constituent data the runners give
+  the β_none/β_η channels the provable connection cap (`--connection-cap auto`).
+- **Baselines**: `pfn`, `efn`, `lorentznet` (~5k parameters, same training protocol);
+  `benchmarks/run_jet_baselines.py` (jet mass, mass window, BDT on (M, τ₃₂));
+  `benchmarks/run_efp_baseline.py` (linear EFPs).
 - **`so33`, `so33_multi`, `so33_signature_only`, `so33_frozen`** — Deep Sets / bottleneck
-  variants used in the tabular comparisons.
+  variants used in the tabular comparisons; `<relu|tanh|gelu>_mlp_w<H>` are MLPs of
+  width H (e.g. `tanh_mlp_w24`, the Adult control at the `so33_multi` parameter count).
 
 ## Reproducing the experiments
 
-All commands run from the repo root and write per-seed JSON to `results/`;
-`python -m benchmarks.aggregate` reduces them to tables (AUC, and background
-rejection 1/ε_B at ε_S = 0.3 where it was measured). The whole pipeline is in
-[`paper/runs/week1.sh`](paper/runs/week1.sh) and Appendix B of the paper, with wall
-times. Examples:
+All commands run from the repo root and write one JSON per (model, seed) to
+`results/`, including the git commit, library versions and command line, the
+training-guard outcome (`diverged`) and, for SO33 models, the trained coefficients.
+Commit these JSONs with the code that produced them; per-sample `.npz` files
+(`--save-scores`) are git-ignored and belong in the Zenodo archive.
+`python -m benchmarks.aggregate` reduces them to tables and
+`python -m benchmarks.stats` compares models across seeds (Welch test and paired
+95% intervals). The full pipeline, with wall times, is
+[`paper/runs/week1.sh`](paper/runs/week1.sh). Examples:
 
 ```bash
-# Synthetic boost-OOD (the headline), 3 seeds
-for s in 0 1 2; do python -m benchmarks.run_boost_ood --seed $s; done
-
-# Equivariance probe + Figure 1
+# Synthetic boost-OOD, 3 seeds, then the figures (AUC vs rapidity, readout distributions)
+python -m benchmarks.run_boost_ood --seeds 0-2
+python -m benchmarks.figure_boost_ood
 python -m benchmarks.figure_equivariance
 
 # Top tagging on the canonical Kasieczka split. Download first (~2M jets):
 #   python -m benchmarks.download_top_tagging --cache-dir data
-# The run keeps the 1.2M-jet train split in RAM (~4 GB) and takes ~36 min per seed
-# on a CPU; if memory is tight, add --max-train-samples 300000 (val and test are
-# always loaded in full).
-python -m benchmarks.run_top_tagging --representation constituents \
-    --canonical-splits --models eta_invariants --epochs 30 --seed 0
+# Architecture B: check stability first (2 minutes), then train.
+python -m benchmarks.diagnose_archb_stability --cache-dir data --canonical-splits \
+    --max-train-samples 50000
+python -m benchmarks.run_top_tagging --representation constituents --canonical-splits \
+    --models eta_invariants,so33_equivariant_eta_bounded,pfn,efn --seeds 0-2 --save-scores
+python -m benchmarks.run_jet_baselines --canonical-splits --save-scores
+
+# HIGGS with 8 seeds and paired statistics
+python -m benchmarks.run_higgs --seeds 0-7
+python -m benchmarks.stats --experiment higgs --baseline relu_bottleneck
 ```
 
 ## Tests
 
 ```bash
-python -m pytest tests/ -v     # 26 tests
+python -m pytest tests/ -v     # 103 tests, ~15 s
 ```
-
-Covers basis construction & the metric-connection condition, forward pass,
-adjoint-vs-direct autograd consistency, Frobenius regularization, a minimal
-training step, synthetic causal classification, the ablation/dtype variants, the
-canonical Kasieczka split loader (with and without a validation file), background
-rejection against a hand-computed ROC, and `benchmarks.aggregate`.
 
 ## Paper
 

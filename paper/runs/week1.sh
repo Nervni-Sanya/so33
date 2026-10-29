@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
-# Reproduction of every multi-seed experiment in the paper: boost-OOD, HIGGS,
-# Adult, and top tagging (internal-split ablation and the canonical Kasieczka
-# protocol). Run from the repository root.
+# Reproduction of every experiment in the paper, on the corrected code
+# (gradient through the adaptive scale, Architecture-B connection cap,
+# divergence guards). Run from the repository root.
 #
-# Wall-time estimate (CPU): the first three experiments ~2-3 hours total; top
-# tagging adds ~30 minutes for the internal split (eta_invariants ~1 min/seed;
-# the so33_signature_only baseline is ODE-bound, ~25 min) and ~2 hours for the
-# canonical protocol (~36 min per eta_invariants seed, ~14 min for
-# relu_bottleneck). Run sequentially in tmux/screen, or split across machines.
-# Each invocation writes its own per-seed JSON into results/, which
-# `aggregate.py` picks up automatically.
+# Every run writes one JSON per (model, seed) into results/, with the git
+# commit that produced it; tag that commit for the tables. Non-default
+# options are part of the experiment name, so runs never overwrite each other.
+#
+# Wall-time estimates (CPU, ~8 cores):
+#   boost-OOD 3 seeds ............ ~2 h   (ODE models dominate: ~2-10 min each)
+#   HIGGS 8 seeds ................ ~6 h
+#   Adult 3 seeds + controls ..... ~2 h
+#   top tagging, internal split .. ~1 h
+#   top tagging, canonical:
+#     eta_invariants ............. ~36 min / seed
+#     Architecture B ............. ODE per constituent: ~1-2 days / seed on the
+#                                  full 1.2M train jets; use --max-train-samples
+#                                  300000 on a CPU (val/test stay full)
+#     PFN / EFN .................. ~30 min / seed; LorentzNet several hours / seed
+#     jet observables / EFPs ..... minutes (tau_N: numpy kT clustering)
 #
 # Prerequisites:
-#   - pip install -e ".[bench]"   (scikit-learn for AUC / background rejection,
-#                                  plus the top-tagging download dependencies)
+#   - pip install -e ".[bench]"   (scikit-learn, scipy, matplotlib, download deps)
+#   - pip install energyflow       (only for the linear-EFP baseline)
 #   - HIGGS CSV cached under data/ (see benchmarks/run_higgs.py for layout).
 #   - Adult fetched on-demand by run_neutral.py via fetch_openml.
 #   - Top tagging: python -m benchmarks.download_top_tagging --cache-dir data
@@ -23,40 +32,41 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-SEEDS=(0 1 2)
+echo "=== boost-OOD (3 seeds) + figures ==="
+python -m benchmarks.run_boost_ood --seeds 0-2
+python -m benchmarks.figure_boost_ood
+python -m benchmarks.figure_equivariance
 
-echo "=== boost_ood (3 seeds) ==="
-for s in "${SEEDS[@]}"; do
-    python -m benchmarks.run_boost_ood --seed "$s"
-done
+echo "=== HIGGS (8 seeds; same seed = same split, so differences are paired) ==="
+python -m benchmarks.run_higgs --seeds 0-7
+python -m benchmarks.stats --experiment higgs --baseline relu_bottleneck
 
-echo "=== HIGGS matched-bottleneck (3 seeds, 30 epochs each) ==="
-for s in "${SEEDS[@]}"; do
-    python -m benchmarks.run_higgs --seed "$s"
-done
+echo "=== Adult (3 seeds) + parameter-matched and regularised controls ==="
+python -m benchmarks.run_neutral --seeds 0-2
+python -m benchmarks.run_neutral --seeds 0-2 --models tanh_mlp_w24
+python -m benchmarks.run_neutral --seeds 0-2 --models relu_mlp,tanh_mlp,gelu_mlp \
+    --weight-decay 1e-4 --early-stop-patience 5
+python -m benchmarks.stats --experiment neutral --baseline tanh_mlp_w24
 
-echo "=== Adult / neutral (3 seeds) ==="
-for s in "${SEEDS[@]}"; do
-    python -m benchmarks.run_neutral --seed "$s"
-done
-
-echo "=== Top tagging, internal-split ablation (3 seeds + baselines) ==="
-for s in "${SEEDS[@]}"; do
-    python -m benchmarks.run_top_tagging --representation constituents \
-        --models eta_invariants --max-samples 100000 --epochs 30 --seed "$s"
-done
+echo "=== Top tagging, internal-split ablation ==="
 python -m benchmarks.run_top_tagging --representation constituents \
-    --models relu_bottleneck,so33_signature_only --max-samples 100000 \
-    --epochs 30 --seed 0
+    --models eta_invariants,relu_bottleneck,so33_signature_only,so33_equivariant_eta_bounded \
+    --max-samples 100000 --epochs 30 --seeds 0-2
 
 echo "=== Top tagging, canonical Kasieczka protocol ==="
-for s in "${SEEDS[@]}"; do
-    python -m benchmarks.run_top_tagging --representation constituents \
-        --canonical-splits --models eta_invariants --epochs 30 --seed "$s"
-done
-python -m benchmarks.run_top_tagging --representation constituents \
-    --canonical-splits --models relu_bottleneck --epochs 30 --seed 0
+# Pre-flight: norm distribution, connection cap, short training with the cap off/auto.
+python -m benchmarks.diagnose_archb_stability --cache-dir data --canonical-splits \
+    --max-train-samples 50000
+python -m benchmarks.run_top_tagging --representation constituents --canonical-splits \
+    --models eta_invariants,relu_bottleneck,pfn,efn --epochs 30 --seeds 0-2 --save-scores
+python -m benchmarks.run_top_tagging --representation constituents --canonical-splits \
+    --models lorentznet --epochs 30 --seeds 0-2 --save-scores --max-train-samples 300000
+python -m benchmarks.run_top_tagging --representation constituents --canonical-splits \
+    --models so33_equivariant_eta_bounded,so33_equivariant_unbounded,so33_equivariant \
+    --epochs 30 --seeds 0-2 --save-scores --max-train-samples 300000
+python -m benchmarks.run_jet_baselines --canonical-splits --save-scores
+python -m benchmarks.run_efp_baseline --canonical-splits --save-scores
 
 echo
 echo "Done. Aggregate with:"
-echo "    python -m benchmarks.aggregate"
+echo "    python -m benchmarks.aggregate --out results/paper_tables.md"
