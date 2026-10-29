@@ -10,6 +10,8 @@ dist/
 
 # Benchmark outputs. The per-seed JSON records in results/ are meant to be
 # committed with the code that produced them (each carries its git commit);
-# per-sample score / sample arrays are large and go to the Zenodo archive.
-results/**/*.npz
+# everything else there (per-sample .npz arrays, plots) stays out of git -
+# the arrays belong in the Zenodo archive.
+results/*
+!results/*.json
 

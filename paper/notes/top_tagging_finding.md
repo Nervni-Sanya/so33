@@ -1,5 +1,27 @@
 # Top-tagging diagnosis (after week-2)
 
+> **Correction (after the JHEP referee report).** Two explanations in these
+> notes are wrong; the numbers they explain are not.
+> 1. *Architecture B did not "read out at chance".* Its records have test AUC
+>    NaN: the ODE diverged (non-finite logits; accuracy 0.50 is an argmax over
+>    NaN). Lifted massless constituents lie on the null cone, where neither
+>    beta_none nor beta_eta limits their norm, and with the legacy connection
+>    cap the flow overflows once ||c|| ~ 0.1 (`so33.activation`). Its readout
+>    contains <sum h, sum h>_eta = -M_jet^2 at c = 0, so a stably trained
+>    Architecture B is at least a jet-mass tagger. Re-run it with the default
+>    `--connection-cap auto` (check first with
+>    `python -m benchmarks.diagnose_archb_stability --cache-dir data`).
+> 2. *The pairwise term is not the mechanism.* Constituents are massless
+>    (median |m^2/E^2| ~ 5e-8, float32 rounding), and the pooled pairwise mean
+>    is essentially M_jet^2 / n^2. A zero-parameter mass window
+>    -|M_jet - 172.5 GeV| on the same 32 constituents reaches AUC 0.941 on the
+>    canonical test set; eta_invariants (0.948) learns approximately that
+>    window. Compare against `python -m benchmarks.run_jet_baselines`.
+>
+> Also note that before the experiment-name fix the per-component run wrote
+> to the same `top_tagging_constituents__*` files as the global-scaling run,
+> so those single-seed baseline JSONs may be from either normalisation.
+
 ## Smoking-gun result -- CONFIRMED at full scale
 
 On 100k Kasieczka top-tagging constituents (70k train / 15k val /
