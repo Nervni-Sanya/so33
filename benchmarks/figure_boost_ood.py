@@ -14,6 +14,11 @@ Figures for the boost-OOD experiment, from the records written by
       this is <beta(x), beta(x)>_eta: rapidity-independent for beta_eta,
       but shrinking with ||x||_2 for beta_euc, which is what moves the
       OOD inputs out of the region the head was trained on.
+  fig_boost_ood_coeff_norms.pdf : training trajectory of the connection
+      coefficient norm ||c||_2 (mean over channels and seeds) for every
+      model with SO33 activations. With one particle per sample the
+      Architecture-B readout does not depend on c, so only the Frobenius
+      penalty acts on it and ||c|| decays towards 0.
 
 Run (after run_boost_ood):
     python -m benchmarks.figure_boost_ood --results-dir results
@@ -109,6 +114,28 @@ def main(argv: list[str] | None = None) -> int:
     path_a = out_dir / "fig_boost_ood_rapidity.pdf"
     fig.savefig(path_a)
     print(f"Wrote {path_a}")
+
+    # (c) ||c|| training trajectories (from the per-epoch history)
+    traj: dict[str, list[list[float]]] = collections.defaultdict(list)
+    for r in recs:
+        hist = [h for h in r.get("history", []) if "coeff_norms" in h]
+        if hist and not r.get("diverged"):
+            traj[r["model"]].append([float(np.mean(h["coeff_norms"])) for h in hist])
+    if traj:
+        fig, ax = plt.subplots(figsize=(5.6, 3.6))
+        for model in sorted(traj):
+            n = min(len(t) for t in traj[model])
+            curve = np.mean([t[:n] for t in traj[model]], axis=0)
+            ax.plot(np.arange(1, n + 1), curve, label=model)
+        ax.set_yscale("log")
+        ax.set_xlabel("epoch")
+        ax.set_ylabel(r"$\|c\|_2$ (mean over channels and seeds)")
+        ax.grid(True, which="both", alpha=0.3)
+        ax.legend(fontsize=6, frameon=False)
+        fig.tight_layout()
+        path_c = out_dir / "fig_boost_ood_coeff_norms.pdf"
+        fig.savefig(path_c)
+        print(f"Wrote {path_c}")
 
     # (b) <h, h>_eta distributions, ID vs OOD, beta_euc vs beta_eta
     panels = []
