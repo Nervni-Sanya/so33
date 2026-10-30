@@ -1,7 +1,7 @@
 # Boost-OOD, seed 0, on the corrected code
 
 Per-model records of `python -m benchmarks.run_boost_ood --seeds 0` (commit
-1143514, see each record's `provenance`), run after
+77ba122, see each record's `provenance`), run after
 the adaptive-scale gradient fix and with the Architecture-B connection cap
 (`--connection-cap auto`). They answer the rewrite's TODO "re-run Table 1 and
 state whether any number changes" for seed 0, and are the data behind
