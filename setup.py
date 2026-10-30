@@ -20,8 +20,13 @@ setup(
         "dev": ["pytest", "matplotlib", "jupyter"],
         # Everything the benchmark harness needs, incl. the top-tagging
         # download:  pip install -e ".[bench]"
-        "bench": ["scikit-learn>=1.0", "huggingface_hub", "pandas",
-                  "pyarrow", "tables"],
+        "bench": ["scikit-learn>=1.0", "scipy", "matplotlib", "huggingface_hub",
+                  "pandas", "pyarrow", "tables"],
+        # Only for the linear-EFP baseline (benchmarks.run_efp_baseline).
+        # energyflow pulls in wasserstein, which pins numpy<2; the EFP code
+        # works with numpy 2, so re-install numpy>=2 afterwards if pip
+        # downgraded it.
+        "efp": ["energyflow>=1.3"],
     },
     classifiers=[
         "License :: OSI Approved :: MIT License",

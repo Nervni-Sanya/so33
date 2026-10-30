@@ -415,8 +415,9 @@ class EquivariantSO33Classifier(nn.Module):
     to give every channel the cap ``safe_connection_cap(r, T)``, which
     provably keeps ||h_i|| <= 2 ||p_i|| for inputs up to that norm and
     every value of c. The cap is a function of the parameters only, so it
-    adds no breaking of equivariance. With bound "euclidean" inputs already
-    satisfy ||x|| < 1 and the cap is 1 (unchanged). An explicit
+    adds no breaking of equivariance. With bound "euclidean" inputs satisfy
+    ||x|| < 1, so the cap is min(1, safe_connection_cap(1, T)) =
+    min(1, 0.92 / T): 1 (unchanged) for the experiments' T = 0.3. An explicit
     ``connection_cap`` (also accepted inside ``so33_kwargs``) wins over
     ``input_norm_bound``.
     """

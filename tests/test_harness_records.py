@@ -136,3 +136,22 @@ def test_runs_with_different_protocols_do_not_overwrite_each_other(canonical_cac
     ]
     rec = json.loads((tmp_path / names[1]).read_text())
     assert "norm=per_component" in rec["dataset"]
+
+
+def test_results_do_not_depend_on_the_global_rng_state(tmp_path):
+    """Each model is seeded right before it is built, so its record does not
+    depend on whatever consumed random numbers earlier in the process (other
+    models, other seeds, data loading)."""
+    from benchmarks.datasets import synthetic_tabular
+    split = synthetic_tabular(n_samples=300, n_features=6, n_classes=2,
+                              name="toy_flat", seed=0)
+    meta = run_metadata(["test"])
+    recs = []
+    for prior_seed, prior_draws, out in ((1, 5, tmp_path / "a"), (2, 9, tmp_path / "b")):
+        torch.manual_seed(prior_seed)
+        torch.rand(prior_draws)                    # a different global RNG state
+        run_tabular_experiment("toy_flat", split, models=["so33"], epochs=1,
+                               results_dir=out, run_meta=meta)
+        recs.append(json.loads((out / "toy_flat__so33__seed0.json").read_text()))
+    assert recs[0]["test_metrics"] == recs[1]["test_metrics"]
+    assert recs[0]["so33"]["coeffs"] == recs[1]["so33"]["coeffs"]

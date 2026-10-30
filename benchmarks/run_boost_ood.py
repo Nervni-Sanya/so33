@@ -50,7 +50,7 @@ from benchmarks.models import (
 from benchmarks.provenance import experiment_tag, parse_seeds, run_metadata
 from benchmarks.synthetic import generate_boost_invariant_dataset
 from benchmarks.tabular_runner import connection_cap_kwargs, so33_summary
-from benchmarks.train import train_classifier, TrainConfig
+from benchmarks.train import train_classifier, TrainConfig, predict_logits
 
 DEFAULT_MODELS = ("so33,so33_multi,so33_signature_only,"
                   "relu_bottleneck,relu_mlp,"
@@ -63,8 +63,7 @@ DEFAULT_MODELS = ("so33,so33_multi,so33_signature_only,"
 def _scores(model, X) -> np.ndarray | None:
     """Signal probabilities, or None if any logit is non-finite (diverged)."""
     model.eval()
-    with torch.no_grad():
-        logits = model(X)
+    logits = predict_logits(model, X)
     if not torch.isfinite(logits).all():
         return None
     return torch.softmax(logits, dim=-1)[:, 1].cpu().numpy()
@@ -168,6 +167,7 @@ def run_seed(args, seed: int, names: list[str], experiment: str,
         bound = True if name.startswith("so33") else None
         cap_kwargs = (connection_cap_kwargs(args.connection_cap, r_max_set)
                       if is_set else {})
+        torch.manual_seed(seed)        # initial weights depend only on (model, seed)
         model = build_model(name, in_features=in_features, out_features=2,
                             T=0.3, bound_input=bound,
                             representation=representation, **cap_kwargs)

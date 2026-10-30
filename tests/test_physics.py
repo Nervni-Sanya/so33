@@ -19,11 +19,13 @@ parentheses) with at least two orders of magnitude of headroom.
     nothing there (massless constituents).
   • RK4 converges at fourth order on the exact null-cone solution
     v(t) = x / (1 - c u0 t) of a single boost coefficient.
-  • safe_connection_cap: the worst case reaches exactly the predicted
-    growth 1 / (1 - margin * 3 sqrt(6) / 8) <= 2; random and adversarial
-    connections of any size stay finite (forward and adjoint) and obey
-    ||sigma(x)|| <= r0 / (1 - alpha r0 T); the legacy cap blows up on
-    the same worst case.
+  • safe_connection_cap: a null input on a single saturated boost grows
+    by exactly 1 / (1 - margin * 3 sqrt(6) / 8) = 1.849 (closed form); the
+    worst direction in that boost plane, a timelike input with
+    <x, x>_eta = -0.49 ||x||^2, reaches 1.9786 ||x||, just below the
+    guaranteed 2 ||x||; random and adversarial connections of any size
+    stay finite (forward and adjoint) and obey ||sigma(x)|| <=
+    r0 / (1 - alpha r0 T); the legacy cap blows up on the null input.
 
 Run:
     python -m pytest tests/test_physics.py -v
@@ -176,7 +178,7 @@ def test_rk4_is_fourth_order_on_the_exact_solution():
 
 # ── stability guarantee ─────────────────────────────────────────────────────
 
-def test_safe_cap_worst_case_reaches_the_predicted_growth():
+def test_safe_cap_null_input_growth_matches_the_closed_form():
     R, T, margin = 50.0, 0.3, 0.5
     kappa = safe_connection_cap(R, T, margin)
     x = _null_input(R / math.sqrt(2))                 # ||x|| = R
@@ -186,7 +188,21 @@ def test_safe_cap_worst_case_reaches_the_predicted_growth():
     assert predicted <= 1 / (1 - margin)
 
 
-def test_legacy_cap_blows_up_on_the_same_worst_case():
+def test_safe_cap_worst_direction_stays_below_the_guarantee():
+    """Scan the input direction in the boost plane of a saturated (0,3)
+    coefficient: the maximum growth (a timelike input, measured 1.9786) is
+    close to, but below, the guaranteed 1 / (1 - margin) = 2."""
+    R, T = 50.0, 0.3
+    kappa = safe_connection_cap(R, T)
+    t = torch.linspace(0, 2 * math.pi, 721, dtype=torch.float64)
+    x = torch.zeros(len(t), DIM, dtype=torch.float64)
+    x[:, 0], x[:, 3] = R * torch.cos(t), R * torch.sin(t)
+    growth = _act(_single_boost(1e6 * kappa), kappa=kappa)(x).norm(dim=-1) / R
+    assert growth.max().item() <= 2.0
+    assert growth.max().item() > 1.97
+
+
+def test_legacy_cap_blows_up_on_the_null_input():
     x = _null_input(40 / math.sqrt(2))
     y = _act(_single_boost(1.0))(x)
     assert not bool(torch.isfinite(y).all()) or y.norm().item() > 1e6
@@ -229,3 +245,8 @@ def test_safe_connection_cap_formula():
         safe_connection_cap(0.0, 0.3)
     with pytest.raises(ValueError):
         safe_connection_cap(1.0, 0.3, margin=1.0)
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            safe_connection_cap(bad, 0.3)
+        with pytest.raises(ValueError):
+            SO33Activation(T=0.3, method="rk4", connection_cap=bad)

@@ -4,8 +4,9 @@ numpy>=1.21.0
 
 # Needed by the benchmarks: AUC / background rejection (benchmarks.tabular_runner)
 # and the Adult loader (fetch_openml). Without it test_auc / bg_rej_* are
-# left out of the results (with a RuntimeWarning).
+# left out of the results (with a RuntimeWarning). scipy: benchmarks.stats.
 scikit-learn>=1.0
+scipy>=1.7
 
 # Optional — for examples and Jupyter notebook
 matplotlib>=3.5.0
@@ -13,3 +14,8 @@ jupyter>=1.0.0
 
 # Only for the top-tagging data download (benchmarks.download_top_tagging):
 #   pip install huggingface_hub pandas pyarrow tables
+
+# Only for the linear-EFP baseline (benchmarks.run_efp_baseline):
+#   pip install energyflow   (then pip install "numpy>=2" if pip downgraded it)
+# Optional, for the FastJet cross-check in tests/test_jet_observables.py
+# (Linux / macOS wheels only):  pip install fastjet

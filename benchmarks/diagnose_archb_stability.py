@@ -81,6 +81,9 @@ def _norm_report(X: torch.Tensor) -> dict:
     }
 
 
+EUCLIDEAN_BOUND_MODELS = ("so33_equivariant", "so33_equivariant_frozen")
+
+
 def _legacy_threshold(r_max: float, T: float) -> float | None:
     """||c|| above which the legacy cap (kappa = 1) is no longer provably safe."""
     w = 1.0 / (BOOST_GROWTH_CONST * r_max * T)      # ||omega_eff||_F at q = 1
@@ -89,7 +92,9 @@ def _legacy_threshold(r_max: float, T: float) -> float | None:
     return w / (math.sqrt(2.0) * (1.0 - w))         # ||omega_eff|| = s/(1+s), s = sqrt2 ||c||
 
 
-def _train_probe(split, name: str, cap_mode: str, r_max: float, args) -> dict:
+def _train_probe(split, name: str, cap_mode: str, r_max: float, r_in: float,
+                 args) -> dict:
+    """Short training run; r_in is the largest norm the activations see."""
     torch.manual_seed(args.seed)
     kw = {"input_norm_bound": r_max} if cap_mode == "auto" else {}
     model = build_model(name, in_features=4, out_features=2,
@@ -114,7 +119,7 @@ def _train_probe(split, name: str, cap_mode: str, r_max: float, args) -> dict:
             if not torch.isfinite(gn):
                 bad = "non-finite gradient"
         w_eff = max(a.effective_connection_norm() for a in acts)
-        q = BOOST_GROWTH_CONST * w_eff * r_max * args.T
+        q = BOOST_GROWTH_CONST * w_eff * r_in * args.T
         q_max = max(q_max, q)
         if bad is not None:
             first_bad = {"step": step, "reason": bad, "q": q,
@@ -154,14 +159,18 @@ def main(argv: list[str] | None = None) -> int:
     split, source = _load(args)
     norms = _norm_report(split.X_train)
     r_max = max_constituent_norm(split.X_train)
-    cap = min(1.0, safe_connection_cap(r_max, args.T))
-    thr = _legacy_threshold(r_max, args.T)
+    # The Euclidean-bound variants map every input into the unit ball, so
+    # their activations only ever see norms < 1 (EquivariantSO33Classifier).
+    r_in = 1.0 if args.model in EUCLIDEAN_BOUND_MODELS else r_max
+    cap = min(1.0, safe_connection_cap(r_in, args.T))
+    thr = _legacy_threshold(r_in, args.T)
     print(f"[stability] data: {source}  {split.summary()}")
     print(f"[stability] train-constituent norms: median {norms['median']:.2f}, "
           f"p99 {norms['p99']:.2f}, p99.9 {norms['p999']:.2f}, max {norms['max']:.2f}; "
           f"median |m^2|/E^2 = {norms['median_abs_m2_over_E2']:.1e}")
-    print(f"[stability] auto connection cap for r_max = {r_max:.2f}, T = {args.T}: "
-          f"kappa = {cap:.4f} (q <= 0.5 for every c)")
+    print(f"[stability] largest activation-input norm r = {r_in:.2f} "
+          f"({'Euclidean bound' if r_in != r_max else 'raw lifted constituents'}); "
+          f"auto connection cap for T = {args.T}: kappa = {cap:.4f} (q <= 0.5 for every c)")
     if thr is None:
         print("[stability] the legacy cap (kappa = 1) is provably safe for this data")
     else:
@@ -171,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
     runs = []
     for mode in ("off", "auto"):
         print(f"[stability] training {args.model} for {args.steps} steps, cap {mode}")
-        res = _train_probe(split, args.model, mode, r_max, args)
+        res = _train_probe(split, args.model, mode, r_max, r_in, args)
         runs.append(res)
         fb = res["first_nonfinite"]
         if fb is None:
@@ -187,7 +196,8 @@ def main(argv: list[str] | None = None) -> int:
     path.write_text(json.dumps({
         "experiment": "diagnose_archb_stability", "data": source,
         "dataset": split.name, "model": args.model, "T": args.T,
-        "constituent_norms": norms, "auto_connection_cap": cap,
+        "constituent_norms": norms, "activation_input_norm": r_in,
+        "auto_connection_cap": cap,
         "legacy_unsafe_above_coeff_norm": thr, "runs": runs,
         "provenance": run_metadata(argv),
     }, indent=2))

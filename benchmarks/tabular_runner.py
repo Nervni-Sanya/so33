@@ -44,7 +44,7 @@ from .models import (
     MATCHED_MODELS, NATURAL_MODELS, SET_MODELS,
 )
 from .provenance import run_metadata
-from .train import train_classifier, TrainConfig, so33_activations
+from .train import train_classifier, TrainConfig, predict_logits, so33_activations
 
 
 def binary_metrics(scores, y_true) -> dict[str, float]:
@@ -96,8 +96,7 @@ def evaluate_test(
     ``scores`` is the per-sample signal probability (binary tasks) or None.
     """
     model.eval()
-    with torch.no_grad():
-        logits = model(X_test)
+    logits = predict_logits(model, X_test)
     finite = torch.isfinite(logits).all(dim=-1)
     nonfinite_frac = 1.0 - finite.double().mean().item()
     pred = logits.argmax(dim=-1)
@@ -229,6 +228,10 @@ def run_tabular_experiment(
             continue
         print(f"[{experiment}] {name} ({family}) | train ...")
 
+        # Seed before building, so the initial weights depend only on
+        # (model, seed), not on which models or seeds ran earlier in this
+        # process (train_classifier re-seeds for the batch order).
+        torch.manual_seed(seed)
         model = build_model(
             name,
             in_features  = split.n_features,

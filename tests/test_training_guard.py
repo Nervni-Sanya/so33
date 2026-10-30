@@ -29,7 +29,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from benchmarks.train import TrainConfig, train_classifier
+from benchmarks.train import TrainConfig, predict_logits, train_classifier
 from benchmarks.tabular_runner import evaluate_test
 from benchmarks.aggregate import group_by_experiment_model, is_diverged, render_tabular
 from so33.network import SO33Network
@@ -198,3 +198,12 @@ def test_history_records_so33_coefficient_norms():
     assert all(len(h["coeff_norms"]) == 1 for h in res.history)
     assert res.final_coeff_norms == [pytest.approx(model.activation.coeff_norm())]
     assert math.isfinite(res.best_val_loss)
+
+
+def test_chunked_prediction_equals_a_full_batch_forward():
+    torch.manual_seed(5)
+    model = SO33Network(in_features=6, out_features=2, T=0.3, method="rk4")
+    X = torch.randn(50, 6, dtype=torch.float64)
+    with torch.no_grad():
+        full = model(X)
+    assert torch.allclose(predict_logits(model, X, chunk_size=7), full, rtol=0, atol=1e-12)

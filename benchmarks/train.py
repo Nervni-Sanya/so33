@@ -76,6 +76,22 @@ def so33_activations(model: nn.Module) -> list[SO33Activation]:
     return [m for m in model.modules() if isinstance(m, SO33Activation)]
 
 
+def predict_logits(model: nn.Module, X: torch.Tensor,
+                   chunk_size: int = 8192) -> torch.Tensor:
+    """``model(X)`` without gradients, in chunks of ``chunk_size`` samples.
+
+    The canonical top-tagging validation and test sets have ~400k jets; one
+    full-batch forward of a wide per-constituent model would need tens of
+    GB. The models act on each sample independently, so chunking changes
+    no prediction.
+    """
+    with torch.no_grad():
+        if len(X) <= chunk_size:
+            return model(X)
+        return torch.cat([model(X[i:i + chunk_size])
+                          for i in range(0, len(X), chunk_size)])
+
+
 def train_classifier(
     model: nn.Module,
     X_train: torch.Tensor,
@@ -203,7 +219,7 @@ def train_classifier(
         # Validation
         model.eval()
         with torch.no_grad():
-            val_logits = model(X_val)
+            val_logits = predict_logits(model, X_val)
             finite = torch.isfinite(val_logits).all(dim=-1)
             val_nonfinite_frac = 1.0 - finite.double().mean().item()
             val_loss = (criterion(val_logits[finite], y_val[finite]).item()

@@ -37,9 +37,11 @@ are fixed in the code; the affected experiments have to be re-run.
 
 - **Gradient bug.** The adaptive scale ω → ω/(1+‖ω‖_F) was evaluated without
   gradient, so training ignored its derivative (autograd vs. finite differences:
-  0.3–4% error). It is now differentiable. The *forward* map is unchanged
-  (the equivariance CSV reproduces byte for byte); every *trained* SO33 number
-  can change slightly.
+  0.3–4% error). It is now differentiable. The *forward* map is unchanged in
+  float64, the dtype of every experiment (the equivariance CSV reproduces byte
+  for byte); every *trained* SO33 number can change slightly — on the boost-OOD
+  seed-0 re-run none changed at the quoted precision
+  ([`paper/runs/boost_ood_seed0_corrected/`](paper/runs/boost_ood_seed0_corrected/)).
 - **Architecture B on top tagging diverged** (test AUC NaN), it was not "at
   chance". Lifted massless constituents lie on the null cone, where neither the
   η rescaling nor any equivariant input map bounds their norm, and with the old
@@ -82,7 +84,8 @@ background rejection and statistics; the rest is for the top-tagging download):
 
 ```bash
 pip install -e ".[bench]"
-pip install energyflow      # only for the linear-EFP baseline
+pip install -e ".[efp]"     # only for the linear-EFP baseline (energyflow); it pins
+                            # numpy<2 via wasserstein - re-install numpy>=2 afterwards
 ```
 
 ```python
@@ -136,8 +139,9 @@ equivariance.
 - **`so33_equivariant`** (Arch B) — same lift, four SO33 activation channels per
   particle, then per channel the mean η-norm, mean |η-norm| and the jet total's
   η-norm (= −M²_jet at c = 0) into a 12–32–2 head (542 parameters). Variants:
-  `_unbounded`, `_eta_bounded`, `_frozen`. On per-constituent data the runners give
-  the β_none/β_η channels the provable connection cap (`--connection-cap auto`).
+  `_unbounded`, `_eta_bounded`, `_frozen`. With `--connection-cap auto` (default) the
+  runners give the β_none/β_η channels the provable cap for the largest training
+  constituent; the β_euc channels see ‖x‖ < 1 and get min(1, 0.92/T) = 1 at T = 0.3.
 - **Baselines**: `pfn`, `efn`, `lorentznet` (~5k parameters, same training protocol);
   `benchmarks/run_jet_baselines.py` (jet mass, mass window, BDT on (M, τ₃₂));
   `benchmarks/run_efp_baseline.py` (linear EFPs).

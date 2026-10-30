@@ -17,8 +17,9 @@ The experiments integrate with fixed-step RK4 over T = 0.3 with step 0.03
 Measured agreement (float64): FD vs autograd ~1e-9 (the FD truncation
 floor), adjoint vs direct ~1e-11. A gradient that drops the derivative of
 the cap (the stop-gradient bug) is off by 2e-3 .. 4e-2 in the
-finite-difference test and by 1.4% .. 142% in the radial test, so the 1e-6
-tolerance catches it with a margin of more than three orders of magnitude.
+finite-difference test and by 42% (kappa = 1) and 849% (kappa = 0.05) in
+the radial test, so the 1e-6 tolerance catches it with a margin of more
+than three orders of magnitude.
 
 Run:
     python -m pytest tests/test_adjoint.py -v

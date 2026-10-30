@@ -18,11 +18,15 @@
 #                                  full 1.2M train jets; use --max-train-samples
 #                                  300000 on a CPU (val/test stay full)
 #     PFN / EFN .................. ~30 min / seed; LorentzNet several hours / seed
-#     jet observables / EFPs ..... minutes (tau_N: numpy kT clustering)
+#     jet observables + BDT ...... ~5 min (tau_N: numpy kT clustering, cached)
+#     linear EFPs (d <= 5) ........ ~3 core-hours on the 2M jets (use --n-jobs);
+#                                   d <= 7 (the EFP paper's setting) ~50 core-hours
 #
 # Prerequisites:
 #   - pip install -e ".[bench]"   (scikit-learn, scipy, matplotlib, download deps)
-#   - pip install energyflow       (only for the linear-EFP baseline)
+#   - pip install energyflow       (only for the linear-EFP baseline; it pulls in
+#                                   wasserstein, which pins numpy<2 - re-install
+#                                   numpy>=2 afterwards if pip downgraded it)
 #   - HIGGS CSV cached under data/ (see benchmarks/run_higgs.py for layout).
 #   - Adult fetched on-demand by run_neutral.py via fetch_openml.
 #   - Top tagging: python -m benchmarks.download_top_tagging --cache-dir data
@@ -64,8 +68,14 @@ python -m benchmarks.run_top_tagging --representation constituents --canonical-s
 python -m benchmarks.run_top_tagging --representation constituents --canonical-splits \
     --models so33_equivariant_eta_bounded,so33_equivariant_unbounded,so33_equivariant \
     --epochs 30 --seeds 0-2 --save-scores --max-train-samples 300000
-python -m benchmarks.run_jet_baselines --canonical-splits --save-scores
-python -m benchmarks.run_efp_baseline --canonical-splits --save-scores
+for s in 0 1 2; do   # observables are clustered once and cached; only the BDT depends on the seed
+    python -m benchmarks.run_jet_baselines --canonical-splits --save-scores --seed "$s" \
+        --cache-observables data/jet_observables_canonical.npz
+done
+python -m benchmarks.run_efp_baseline --canonical-splits --save-scores --n-jobs 4 \
+    --cache-efps data/efps_canonical_d5.npz
+python -m benchmarks.figure_toptag_mass --cache-dir data --canonical-splits \
+    --scores "Readout A=results/top_tagging_canonical__eta_invariants__seed0__scores.npz"
 
 echo
 echo "Done. Aggregate with:"

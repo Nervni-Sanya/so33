@@ -124,8 +124,9 @@ def safe_connection_cap(input_norm: float, T: float, margin: float = 0.5) -> flo
     T          : integration horizon.
     margin     : alpha * input_norm * T, in (0, 1).
     """
-    if input_norm <= 0.0 or T <= 0.0:
-        raise ValueError(f"input_norm and T must be positive; got {input_norm}, {T}")
+    if not (0.0 < input_norm < math.inf and 0.0 < T < math.inf):
+        raise ValueError(f"input_norm and T must be positive and finite; "
+                         f"got {input_norm}, {T}")
     if not 0.0 < margin < 1.0:
         raise ValueError(f"margin must lie in (0, 1); got {margin}")
     return margin / (BOOST_GROWTH_CONST * input_norm * T)
@@ -231,8 +232,8 @@ class SO33Activation(nn.Module):
                 f"bound_input must be bool or one of "
                 f"'none'/'euclidean'/'eta'; got {bound_input!r}"
             )
-        if not connection_cap > 0.0:
-            raise ValueError(f"connection_cap must be positive; got {connection_cap}")
+        if not 0.0 < connection_cap < math.inf:
+            raise ValueError(f"connection_cap must be positive and finite; got {connection_cap}")
 
         solver_options = dict(solver_options) if solver_options else None
         if method in _FIXED_GRID_METHODS and not (

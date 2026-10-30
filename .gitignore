@@ -15,3 +15,5 @@ dist/
 results/*
 !results/*.json
 
+# Downloaded datasets and cached observables / EFPs (large; regenerate locally)
+data/
