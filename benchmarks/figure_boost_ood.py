@@ -99,9 +99,11 @@ def main(argv: list[str] | None = None) -> int:
     train_rap = recs[0]["train_rapidity"]
     fig, ax = plt.subplots(figsize=(5.6, 3.6))
     ax.axvspan(0.0, train_rap, color="0.9", label="training range")
-    for model in sorted(curves, key=lambda m: -np.nanmean(curves[m][1])):
+    styles = ("-", "--", ":", "-.")       # identical curves (e.g. frozen c) stay visible
+    for i, model in enumerate(sorted(curves, key=lambda m: -np.nanmean(curves[m][1]))):
         centres, mean, sd = curves[model]
-        line, = ax.plot(centres, mean, marker="o", markersize=3, label=model)
+        line, = ax.plot(centres, mean, marker="o", markersize=3, label=model,
+                        linestyle=styles[i % len(styles)])
         if np.any(sd > 0):
             ax.fill_between(centres, mean - sd, mean + sd, alpha=0.15,
                             color=line.get_color(), linewidth=0)
