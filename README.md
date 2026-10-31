@@ -146,8 +146,9 @@ equivariance.
 - **Baselines** (referee TODO 4), trained / evaluated under the same canonical protocol:
   `pfn` / `efn` (Particle / Energy Flow Networks, 5,106 / 5,082 parameters) and
   `lorentznet` (5,088 parameters: the official architecture at width 10 instead of 72;
-  beams in the jet's longitudinal rest frame by default, deviations listed in
-  `benchmarks/lorentznet.py`; do not combine it with `--early-stop-patience`);
+  beams in the jet's longitudinal rest frame by default, `lorentznet_lab` with the
+  official lab-frame beams; deviations listed in `benchmarks/lorentznet.py`; its
+  BatchNorm statistics are re-estimated before every validation pass);
   `benchmarks/run_jet_baselines.py` (jet mass, mass window −|M−172.5 GeV|, BDT on
   (M, τ₃₂) with exclusive-kT axes *without* minimisation — τ₂, τ₃ ~30% larger than
   with the one-pass-minimised axes of LHC analyses, so a conservative τ₃₂ baseline);

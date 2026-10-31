@@ -218,6 +218,9 @@ def train_classifier(
 
         # Validation
         model.eval()
+        refresh = getattr(model, "refresh_statistics", None)
+        if refresh is not None:   # BatchNorm models whose running statistics lag the weights (LorentzNet)
+            refresh(X_train[perm[:100 * cfg.batch_size]], cfg.batch_size)
         with torch.no_grad():
             val_logits = predict_logits(model, X_val)
             finite = torch.isfinite(val_logits).all(dim=-1)

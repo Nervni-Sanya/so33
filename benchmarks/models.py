@@ -98,6 +98,7 @@ BASELINE_SET_MODELS = (
     "pfn",                 # Particle Flow Network (benchmarks/pfn.py)
     "efn",                 # Energy Flow Network   (benchmarks/pfn.py)
     "lorentznet",          # LorentzNet            (benchmarks/lorentznet.py)
+    "lorentznet_lab",      # LorentzNet with the official lab-frame beams
 )
 ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS + SET_MODELS + BASELINE_SET_MODELS
 
@@ -146,6 +147,11 @@ def _build_baseline_set(name: str, out_features: int, dtype: torch.dtype) -> nn.
     if name == "lorentznet":
         from .lorentznet import LorentzNet
         return LorentzNet(out_features=out_features, dtype=dtype)
+    if name == "lorentznet_lab":
+        # Official beam spurions (sqrt 2, 0, 0, +-1) in the lab frame instead of
+        # the jet's longitudinal rest frame: the sensitivity row for that choice.
+        from .lorentznet import LorentzNet
+        return LorentzNet(out_features=out_features, dtype=dtype, beam_frame="lab")
     raise ValueError(f"not a baseline set model: {name!r}")
 
 

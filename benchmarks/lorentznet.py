@@ -159,11 +159,15 @@ depending on the seed (0.99 once the running statistics are refreshed with the
 final weights; tests/test_lorentznet.py raises the momentum to 0.5 for that
 reason), and over 6 epochs on 14,000 jets the validation accuracy goes
 0.51, 0.51, 0.24, 0.71, 0.51, 0.98 with a training accuracy of 0.95 - 0.985
-throughout (final test AUC 0.998). So the per-epoch ``val_acc`` of the
-harness records is not meaningful for this model until the cosine schedule
-has annealed the learning rate; the last-epoch model that the protocol
-evaluates is not affected (canonical runs take hundreds of thousands of steps
-and end at a learning rate of ~1e-5).
+throughout (final test AUC 0.998). The harness therefore re-estimates the
+BatchNorm statistics with the current weights before every validation pass
+("precise BatchNorm", ``refresh_statistics``: the cumulative average over up
+to 100 training batches, dropout off). Training itself is untouched (it
+normalises with batch statistics); per-epoch validation, early stopping and
+the final evaluation then use statistics that belong to the weights. Without
+it a 4-epoch run gave test AUC 0.708 instead of 0.998 and early stopping
+restored an epoch-1 model; the 30-epoch last-epoch result was the same
+either way (cosine schedule ends at a learning rate of ~1e-5).
 
 Run:
     # Canonical protocol, three seeds, with per-jet scores:
@@ -602,6 +606,31 @@ class LorentzNet(nn.Module):
                 and x.shape[0] > chunk):
             return torch.cat([self._logits(xc) for xc in x.split(chunk)], dim=0)
         return self._logits(x)
+
+    @torch.no_grad()
+    def refresh_statistics(self, X: torch.Tensor, batch_size: int = 128) -> None:
+        """Re-estimate the BatchNorm running statistics from the jets X with the current
+        weights ("precise BatchNorm"): the cumulative average of the batch statistics over
+        batches of ``batch_size`` jets, computed exactly as training computes them (dropout
+        off). Training is untouched (it normalises with batch statistics); only the statistics
+        that evaluation mode uses change. ``train_classifier`` calls it before every
+        validation pass, so that per-epoch validation is meaningful and the last-epoch model
+        is evaluated with statistics that belong to its weights."""
+        bns = [m for m in self.modules() if isinstance(m, nn.BatchNorm1d)]
+        momenta = [b.momentum for b in bns]
+        for b in bns:
+            b.reset_running_stats()
+            b.momentum = None
+        was_training = self.training
+        self.train()
+        for m in self.modules():
+            if isinstance(m, nn.Dropout):
+                m.eval()
+        for start in range(0, len(X), batch_size):
+            self(X[start:start + batch_size])
+        for b, momentum in zip(bns, momenta):
+            b.momentum = momentum
+        self.train(was_training)
 
     def regularization_loss(self) -> torch.Tensor:
         return torch.zeros((), dtype=self.dtype)

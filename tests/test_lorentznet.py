@@ -967,3 +967,168 @@ def test_short_training_separates_toy_jets(toy_split):
     assert res.n_params == N_PARAMS and res.epochs_run == 3
     out = evaluate_test(model, s.X_test, s.y_test, n_classes=2)
     assert out["test_auc"] >= 0.85, out
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Additions from the adversarial review (append to tests/test_lorentznet.py)
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_batchnorm_and_unit_defaults_are_pinned():
+    """The documented defaults of the official code: BatchNorm momentum 0.1, eps 1e-5, affine,
+    running statistics; harness units (momentum_scale 1), jet-frame beams of mass 1. No other test
+    pins them: the dense model and the in-test reference share the BatchNorm modules, so changing
+    momentum or eps changes both alike."""
+    model = LorentzNet()
+    bns = [m for m in model.modules() if isinstance(m, nn.BatchNorm1d)]
+    assert len(bns) == 2 * model.n_layers
+    for b in bns:
+        assert b.momentum == 0.1 and b.eps == 1e-5 and b.affine and b.track_running_stats
+    assert (model.momentum_scale, model.beam_frame, model.beam_mass) == (1.0, "jet", 1.0)
+
+
+def test_masked_batch_norm_momentum_none_is_the_cumulative_average():
+    """momentum=None: running statistics are the cumulative average over the batches seen
+    (nn.BatchNorm1d semantics); the other branch of _masked_batch_norm was untested."""
+    g = torch.Generator().manual_seed(11)
+    C = 5
+    bn = nn.BatchNorm1d(C, momentum=None, dtype=torch.float64).train()
+    ref = copy.deepcopy(bn)
+    for step in range(4):
+        x = 1.5 * torch.randn(3, 5, 5, C, generator=g, dtype=torch.float64) + step
+        w = (torch.rand(3, 5, 5, generator=g) > 0.4).double()
+        _masked_batch_norm(bn, x, w)
+        ref(x[w.bool()])
+    torch.testing.assert_close(bn.running_mean, ref.running_mean, rtol=1e-12, atol=1e-12)
+    torch.testing.assert_close(bn.running_var, ref.running_var, rtol=1e-12, atol=1e-12)
+    assert int(bn.num_batches_tracked) == int(ref.num_batches_tracked) == 4
+
+
+class _OfficialLGEB(nn.Module):
+    """models.py LGEB.__init__, module for module and in the official order."""
+
+    def __init__(self, n_input, n_output, n_hidden, n_node_attr=0, last_layer=False):
+        super().__init__()
+        dt = torch.float64
+        self.phi_e = nn.Sequential(
+            nn.Linear(n_input * 2 + 2, n_hidden, bias=False, dtype=dt),
+            nn.BatchNorm1d(n_hidden, dtype=dt), nn.ReLU(),
+            nn.Linear(n_hidden, n_hidden, dtype=dt), nn.ReLU())
+        self.phi_h = nn.Sequential(
+            nn.Linear(n_hidden + n_input + n_node_attr, n_hidden, dtype=dt),
+            nn.BatchNorm1d(n_hidden, dtype=dt), nn.ReLU(),
+            nn.Linear(n_hidden, n_output, dtype=dt))
+        layer = nn.Linear(n_hidden, 1, bias=False, dtype=dt)
+        torch.nn.init.xavier_uniform_(layer.weight, gain=0.001)
+        self.phi_x = nn.Sequential(nn.Linear(n_hidden, n_hidden, dtype=dt), nn.ReLU(), layer)
+        self.phi_m = nn.Sequential(nn.Linear(n_hidden, 1, dtype=dt), nn.Sigmoid())
+        if last_layer:
+            del self.phi_x
+
+
+class _OfficialNet(nn.Module):
+    """models.py LorentzNet.__init__ (parameters only)."""
+
+    def __init__(self, n_scalar, n_hidden, n_class, n_layers):
+        super().__init__()
+        dt = torch.float64
+        self.embedding = nn.Linear(n_scalar, n_hidden, dtype=dt)
+        self.LGEBs = nn.ModuleList([
+            _OfficialLGEB(n_hidden, n_hidden, n_hidden, n_node_attr=n_scalar,
+                          last_layer=(i == n_layers - 1)) for i in range(n_layers)])
+        self.graph_dec = nn.Sequential(nn.Linear(n_hidden, n_hidden, dtype=dt), nn.ReLU(),
+                                       nn.Dropout(0.2), nn.Linear(n_hidden, n_class, dtype=dt))
+
+
+@pytest.mark.parametrize("hidden,layers", [(10, 6), (4, 2)])
+def test_initial_weights_are_the_official_ones_for_the_same_seed(hidden, layers):
+    """Same seed -> the very same initial parameters as the official constructors (the docstring's
+    'modules are created in the official order'); the generic equivalence tests overwrite or share
+    the weights and would not see a different creation order."""
+    torch.manual_seed(7)
+    ref = _OfficialNet(2, hidden, 2, layers)
+    torch.manual_seed(7)
+    model = LorentzNet(n_hidden=hidden, n_layers=layers)
+    a, b = ref.state_dict(), model.state_dict()
+    assert list(a) == list(b)
+    for k in a:
+        assert torch.equal(a[k], b[k]), k
+
+
+# Logits of the verbatim official models.py (LorentzNet.forward on padding-free graphs: official edge
+# list, normsq4/dotsq4/psi, segment sums and means, clamp, BatchNorm over all nodes / edges, official
+# pooling) for 3 hand-written jets, lab-frame beams (sqrt 2, 0, 0, +-1), node scalars psi((m^2, label)),
+# H = 6, L = 3, c = 0.3, dropout 0, and the weights made by _golden_model(). Computed once, offline.
+_GOLDEN_JETS = [
+    [[5.0, 3.0, 0.0, 4.0], [4.0, 1.0, 1.0, 1.0], [2.0, 0.0, 2.0, 0.0], [1.5, -0.6, 0.3, 1.3]],
+    [[6.0, -2.0, 4.0, 4.0], [1.0, 1.0, 1.0, 0.5], [3.0, 0.0, -3.0, 0.0], [0.8, 0.1, 0.2, -0.7]],
+    [[2.5, 1.5, -2.0, 0.0], [7.0, -3.0, -2.0, -5.5], [1.2, 0.5, 0.5, 0.9], [4.0, 2.0, 2.0, 3.0]],
+]
+_GOLDEN_EVAL = [[-0.2876921731194274, 0.06003648077792918],
+                [-0.29091419961625603, 0.06265595805040693],
+                [-0.2931005977695161, 0.06411742008761998]]
+_GOLDEN_TRAIN = [[-0.12265324833110598, -0.20469620076269232],
+                 [-0.1268879615582954, -0.1125779466441894],
+                 [-0.1684155349688609, -0.11542179766228537]]
+
+
+def _golden_model() -> LorentzNet:
+    model = LorentzNet(n_hidden=6, n_layers=3, c_weight=0.3, dropout=0.0, beam_frame="lab")
+    g = torch.Generator().manual_seed(1234)
+    with torch.no_grad():
+        for _, p in model.named_parameters():
+            p.copy_(0.4 * torch.randn(p.shape, generator=g, dtype=p.dtype))
+        for name, b in model.named_buffers():
+            if name.endswith("running_mean"):
+                b.copy_(0.3 * torch.randn(b.shape, generator=g, dtype=b.dtype))
+            if name.endswith("running_var"):
+                b.copy_(0.6 + torch.rand(b.shape, generator=g, dtype=b.dtype))
+    return model
+
+
+@pytest.mark.parametrize("mode,golden", [("eval", _GOLDEN_EVAL), ("train", _GOLDEN_TRAIN)])
+def test_logits_match_the_verbatim_official_code_on_hand_jets(mode, golden):
+    """Pins the whole function (graph recipe, psi, Minkowski products, phi_e / phi_m / phi_x / phi_h,
+    clamp, BatchNorm in both modes, pooling, decoder) to numbers produced by the official models.py,
+    independently of the in-test edge-list reimplementation (which shares the graph builder and the
+    modules with the model and was written from the same reading of the code)."""
+    p = torch.tensor(_GOLDEN_JETS, dtype=torch.float64)
+    x = torch.cat([p, torch.ones(3, 4, 1, dtype=torch.float64)], dim=-1)
+    model = _golden_model().train(mode == "train")
+    with torch.no_grad():
+        out = model(x)
+    torch.testing.assert_close(out, torch.tensor(golden, dtype=torch.float64), rtol=0.0, atol=1e-12)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Precise BatchNorm (only with the refresh_statistics patch)
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_refresh_statistics_makes_evaluation_use_the_statistics_of_the_weights(jets):
+    """After refresh_statistics(batch), the evaluation-mode logits of that batch equal its
+    training-mode logits (batch statistics) up to the O(1/n) unbiased-variance factor of the
+    running variance; before it, with random running statistics, they do not."""
+    model = _generic(0, dropout=0.0)
+    batch = jets                                        # 48 jets
+    with torch.no_grad():
+        model.train()
+        train_out = model(batch)
+        model.eval()
+        stale = model(batch)
+        model.refresh_statistics(batch, batch_size=len(batch))
+        assert not model.training                       # the mode is restored
+        fresh = model(batch)
+    assert (stale - train_out).abs().max() > 3e-2
+    assert (fresh - train_out).abs().max() < 1e-2
+    assert all(m.momentum == 0.1 for m in model.modules() if isinstance(m, nn.BatchNorm1d))
+
+
+def test_train_classifier_refreshes_the_statistics_before_every_validation(monkeypatch):
+    s = massless_jet_split(300, 6, seed=0)
+    torch.manual_seed(0)
+    model = LorentzNet(n_hidden=4, n_layers=2)
+    calls, orig = [], model.refresh_statistics
+    monkeypatch.setattr(model, "refresh_statistics",
+                        lambda X, batch_size=128: (calls.append(len(X)), orig(X, batch_size))[1])
+    train_classifier(model, s.X_train, s.y_train, s.X_val, s.y_val,
+                     TrainConfig(epochs=3, batch_size=64, seed=0))
+    assert calls == [len(s.X_train)] * 3                # 210 jets < 100 batches of 64

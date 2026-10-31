@@ -54,6 +54,7 @@ PAPER_COUNTS = [
     ("pfn",                          4,   "constituents", 5106),
     ("efn",                          4,   "constituents", 5082),
     ("lorentznet",                   4,   "constituents", 5088),
+    ("lorentznet_lab",               4,   "constituents", 5088),
 ]
 
 

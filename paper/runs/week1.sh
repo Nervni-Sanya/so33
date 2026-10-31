@@ -20,10 +20,9 @@
 #     PFN / EFN .................. ~30 min / seed
 #     LorentzNet (5,088 params) .. ~2 h / epoch on one core for 1.2M jets
 #                                  (~60 h / seed; ~24 h on 4 threads); three
-#                                  one-thread seeds in parallel are fastest.
-#                                  Never use --early-stop-patience with it: its
-#                                  BatchNorm makes early-epoch validation
-#                                  metrics meaningless (the last epoch is fine)
+#                                  one-thread seeds in parallel are fastest;
+#                                  lorentznet_lab (official lab-frame beams) is
+#                                  the sensitivity row for the beam choice
 #     jet observables + BDT ...... ~5 min (tau_N: numpy kT clustering, cached)
 #     linear EFPs (d <= 5) ........ ~3 core-hours on the 2M jets (use --n-jobs);
 #                                   d <= 7 (the EFP paper's setting) ~50 core-hours
