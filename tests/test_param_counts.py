@@ -50,6 +50,10 @@ PAPER_COUNTS = [
     ("tanh_mlp",                     105, "flat", 27650),
     ("relu_bottleneck",              105, "flat", 650),
     ("tanh_mlp_w24",                 105, "flat", 2594),   # referee's control
+    # ~5k-parameter published-tagger baselines (referee TODO 4)
+    ("pfn",                          4,   "constituents", 5106),
+    ("efn",                          4,   "constituents", 5082),
+    ("lorentznet",                   4,   "constituents", 5088),
 ]
 
 

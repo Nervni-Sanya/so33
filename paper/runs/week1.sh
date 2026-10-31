@@ -17,7 +17,13 @@
 #     Architecture B ............. ODE per constituent: ~1-2 days / seed on the
 #                                  full 1.2M train jets; use --max-train-samples
 #                                  300000 on a CPU (val/test stay full)
-#     PFN / EFN .................. ~30 min / seed; LorentzNet several hours / seed
+#     PFN / EFN .................. ~30 min / seed
+#     LorentzNet (5,088 params) .. ~2 h / epoch on one core for 1.2M jets
+#                                  (~60 h / seed; ~24 h on 4 threads); three
+#                                  one-thread seeds in parallel are fastest.
+#                                  Never use --early-stop-patience with it: its
+#                                  BatchNorm makes early-epoch validation
+#                                  metrics meaningless (the last epoch is fine)
 #     jet observables + BDT ...... ~5 min (tau_N: numpy kT clustering, cached)
 #     linear EFPs (d <= 5) ........ ~3 core-hours on the 2M jets (use --n-jobs);
 #                                   d <= 7 (the EFP paper's setting) ~50 core-hours

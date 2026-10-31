@@ -143,9 +143,14 @@ equivariance.
   `_unbounded`, `_eta_bounded`, `_frozen`. With `--connection-cap auto` (default) the
   runners give the β_none/β_η channels the provable cap for the largest training
   constituent; the β_euc channels see ‖x‖ < 1 and get min(1, 0.92/T) = 1 at T = 0.3.
-- **Baselines**: `pfn`, `efn`, `lorentznet` (~5k parameters, same training protocol);
-  `benchmarks/run_jet_baselines.py` (jet mass, mass window, BDT on (M, τ₃₂));
-  `benchmarks/run_efp_baseline.py` (linear EFPs).
+- **Baselines** (referee TODO 4), trained / evaluated under the same canonical protocol:
+  `pfn` / `efn` (Particle / Energy Flow Networks, 5,106 / 5,082 parameters) and
+  `lorentznet` (5,088 parameters: the official architecture at width 10 instead of 72;
+  beams in the jet's longitudinal rest frame by default, deviations listed in
+  `benchmarks/lorentznet.py`; do not combine it with `--early-stop-patience`);
+  `benchmarks/run_jet_baselines.py` (jet mass, mass window −|M−172.5 GeV|, BDT on
+  (M, τ₃₂) with exclusive-kT axes); `benchmarks/run_efp_baseline.py` (linear Fisher
+  discriminant on energy flow polynomials, d ≤ 5 by default).
 - **`so33`, `so33_multi`, `so33_signature_only`, `so33_frozen`** — Deep Sets / bottleneck
   variants used in the tabular comparisons; `<relu|tanh|gelu>_mlp_w<H>` are MLPs of
   width H (e.g. `tanh_mlp_w24`, the Adult control at the `so33_multi` parameter count).
