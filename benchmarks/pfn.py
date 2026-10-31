@@ -18,8 +18,10 @@ last-epoch model.
 Input. ``forward`` takes the harness tensor x (B, K, 5): ``x[..., :4]`` =
 (E, px, py, pz) divided by one global scale, ``x[..., 4]`` = mask (1 real
 constituent, 0 padding). The networks only see pT fractions and angles, so the
-output does not depend on that scale (nor on whether the inputs are normalised
-at all).
+output does not depend on a GLOBAL rescaling (``--normalize global`` or
+``none``). ``--normalize per_component`` z-scores E, px, py and pz separately,
+which makes pT, rapidity and azimuth meaningless; run_top_tagging refuses it
+for these models.
 
 Kinematics, per constituent (masked rows are set to zero first):
     pT_i   = hypot(px_i, py_i),          z_i = pT_i / sum_j pT_j  (real j only),
@@ -59,7 +61,10 @@ The sign rules fix the eigenvector signs that eigh leaves arbitrary, so the
 output equals energyflow's centre -> rotate -> reflect output up to rounding
 (tests/test_pfn.py checks this on toy jets) except in exact ties: an isotropic
 M (here e1 = y axis) or equal pT in two half-planes (here no flip), where
-energyflow keeps LAPACK's choice. Masked rows get z = 0 and (v, u) = (0, 0).
+energyflow keeps LAPACK's choice; and except for constituents more than ~pi
+in azimuth from the jet axis, where the two azimuth charts (jet axis here,
+hardest constituent in energyflow) wrap differently - impossible for R = 0.8
+jets. Masked rows get z = 0 and (v, u) = (0, 0).
 
 Architecture (energyflow.archs.efn):
     PFN:  logits = out(F(sum_i mask_i Phi(z_i, v_i, u_i)))
@@ -74,8 +79,10 @@ biases. Padding contributes exactly nothing: its Phi input is zero and its
 weight (mask or z) is exactly 0. The EFN is IRC safe: a z = 0 particle has
 weight 0, and splitting a particle collinearly (z -> f z, (1 - f) z at the
 same position) leaves sum_i z_i Phi(r_i) unchanged; the centroid, M and the
-half-plane pT sums are z-weighted, hence IRC safe as well. The PFN, whose Phi
-also sees z_i and whose sum counts particles, is not.
+half-plane pT sums are z-weighted, hence IRC safe as well (away from the
+measure-zero tie surfaces where the axis or reflection choice flips, as in the
+reference). The PFN, whose Phi also sees z_i and whose sum counts particles,
+is not.
 
 Sizes. Defaults Phi = (24, 24, 64), F = (24, 24, 24): the paper's
 Phi = (100, 100, l = 256), F = (100, 100, 100) with every width scaled by ~1/4,
@@ -104,8 +111,8 @@ Departures from the reference:
     PFN it only differs for a real particle at exactly (z, y, phi) = 0;
   - ``forward`` returns logits (no softmax layer), and without autograd it
     evaluates batches larger than ``eval_chunk_size`` jets in chunks (the
-    harness evaluates the full canonical val / test sets, ~400k jets, in one
-    call); that only bounds the memory and changes no number.
+    harness's predict_logits chunks as well; the model-level chunking only
+    bounds the memory of direct calls and changes no number).
 
 Run:
     # Canonical protocol, three seeds, with per-jet scores:

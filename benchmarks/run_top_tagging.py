@@ -52,6 +52,7 @@ import sys
 from .datasets import (
     load_top_tagging, load_top_tagging_constituents, synthetic_tabular,
 )
+from .models import BASELINE_SET_MODELS
 from .provenance import experiment_tag, parse_seeds, run_metadata
 from .tabular_runner import run_tabular_experiment
 
@@ -122,6 +123,12 @@ def main(argv: list[str] | None = None) -> int:
         [m.strip() for m in args.models.split(",")] if args.models
         else None
     )
+    physical = sorted(set(models or ()) & set(BASELINE_SET_MODELS))
+    if args.normalize == "per_component" and physical:
+        # PFN / EFN read pT fractions and angles, LorentzNet Minkowski
+        # products: a per-component z-score destroys both.
+        p.error(f"{', '.join(physical)} need physical four-momenta: use "
+                f"--normalize global (default) or none")
     meta = run_metadata(argv)
     common = {"epochs": args.epochs, "wd": args.weight_decay,
               "es": args.early_stop_patience}

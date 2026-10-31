@@ -432,3 +432,62 @@ def test_short_training_separates_toy_jets(toy_split, name):
     assert res.n_params == N_PARAMS[name]
     out = evaluate_test(model, s.X_test, s.y_test, n_classes=2)
     assert out["test_auc"] >= 0.85, out
+
+
+def _numpy_mlp(h, seq):
+    for mod in seq:
+        if isinstance(mod, torch.nn.Linear):
+            h = h @ mod.weight.detach().numpy().T + mod.bias.detach().numpy()
+        else:
+            h = np.maximum(h, 0.0)
+    return h
+
+
+@pytest.mark.parametrize("name", MODELS)
+def test_forward_equals_numpy_reference(name):
+    """Pins the functional form (energyflow semantics) on the model's own
+    preprocessing: PFN = out(F(sum_i mask_i Phi(z_i, y_i, phi_i))), EFN =
+    out(F(sum_i z_i Phi(y_i, phi_i))). Catches mean pooling, wrong Phi inputs
+    or weights, which the invariance tests and the toy AUC do not."""
+    X, _ = generate_massless_jets(40, 32, seed=3)
+    mask = (X.abs().sum(-1) > 0).to(X.dtype)
+    x = torch.cat([X, mask.unsqueeze(-1)], dim=-1)
+    torch.manual_seed(0)
+    model = MODELS[name]()
+    for m in model.modules():          # random biases, so no layer is homogeneous
+        if isinstance(m, torch.nn.Linear):
+            with torch.no_grad():
+                m.bias.copy_(0.3 * torch.randn_like(m.bias))
+    z, coords, real = (t.numpy() for t in preprocess_constituents(x))
+    if name == "pfn":
+        feats, w = np.concatenate([z[..., None], coords], axis=-1), real.astype(float)
+    else:
+        feats, w = coords, z
+    latent = np.einsum("nk,nkl->nl", w, _numpy_mlp(feats, model.Phi))
+    want = (_numpy_mlp(latent, model.F) @ model.output.weight.detach().numpy().T
+            + model.output.bias.detach().numpy())
+    with torch.no_grad():
+        got = model(x).numpy()
+    np.testing.assert_allclose(got, want, rtol=0.0, atol=1e-10)
+
+
+@pytest.mark.parametrize("name", MODELS)
+def test_degenerate_jets_are_finite_and_have_finite_gradients(name):
+    x = torch.zeros(4, 32, 5, dtype=torch.float64)                    # jet 0: all padding
+    x[1, 0] = torch.tensor([100.0, 60.0, 80.0, 0.0, 1.0])             # jet 1: one constituent
+    x[2, :2] = torch.tensor([[50.0, 30.0, 40.0, 0.0, 1.0]] * 2)       # jet 2: identical pair
+    x[3, :3] = torch.tensor([[50.0, 30.0, 40.0, 0.0, 1.0], [10.0, -6.0, 8.0, 0.0, 1.0],
+                             [5.0, 3.0, 4.0, 0.0, 1.0]])
+    torch.manual_seed(0)
+    model = MODELS[name]()
+    out = model(x)
+    assert torch.isfinite(out).all()
+    torch.nn.functional.cross_entropy(out, torch.zeros(4, dtype=torch.long)).backward()
+    assert all(torch.isfinite(q.grad).all() for q in model.parameters())
+
+
+def test_per_component_normalisation_is_refused_for_physical_baselines():
+    from benchmarks.run_top_tagging import main
+    with pytest.raises(SystemExit):
+        main(["--representation", "constituents", "--models", "pfn",
+              "--normalize", "per_component"])
