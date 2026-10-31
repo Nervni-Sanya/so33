@@ -56,6 +56,12 @@ def binned_auc_by_model(recs: list[dict]) -> dict[str, tuple[np.ndarray, np.ndar
             by_model[r["model"]].append(r["binned_auc"])
     out = {}
     for model, runs in by_model.items():
+        edges = [(b["lo"], b["hi"]) for b in runs[0]]
+        same = [r for r in runs if [(b["lo"], b["hi"]) for b in r] == edges]
+        if len(same) < len(runs):
+            print(f"{model}: {len(runs) - len(same)} run(s) with other rapidity bins "
+                  f"skipped", file=sys.stderr)
+        runs = same
         centres = np.array([(b["lo"] + b["hi"]) / 2 for b in runs[0]])
         aucs = np.array([[b["auc"] for b in run] for run in runs], dtype=float)
         mean = np.nanmean(aucs, axis=0) if len(aucs) else aucs

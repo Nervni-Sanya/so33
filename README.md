@@ -53,7 +53,8 @@ are fixed in the code; the affected experiments have to be re-run.
   not the mechanism.
 - **β_η is a rescaling, not a bound**, and the flow is SO(3,3)-equivariant only at
   c = 0. A readout of ⟨σ(x),σ(x)⟩_η cannot see the connection (the flow conserves
-  it), so ε_σ — not ε_m — is the equivariance measure (`figure_equivariance`).
+  it, up to the integrator's error), so ε_σ — not ε_m — is the equivariance
+  measure (`figure_equivariance`).
 - **Result files** of runs that differed only in, e.g., the constituent
   normalisation overwrote each other. Non-default options are now part of the
   experiment name.

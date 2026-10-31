@@ -61,12 +61,20 @@ def main(argv: list[str] | None = None) -> int:
                                       n_classes=2, name="neutral_synthetic",
                                       seed=seed)
             epochs = 5
-            experiment = "neutral_quick"
+            experiment = experiment_tag(
+                "neutral_quick",
+                {"wd": args.weight_decay, "es": args.early_stop_patience},
+                {"wd": 0.0, "es": None})
         else:
             split = load_neutral_tabular(seed=seed, standardise=True)
             epochs = args.epochs
+            # load_neutral_tabular falls back to breast cancer when Adult cannot
+            # be fetched; never file those runs under the Adult experiment.
+            base = "neutral" if split.name == "neutral_adult" else split.name
+            if base != "neutral":
+                print(f"[neutral] WARNING: Adult unavailable, running on {split.name}")
             experiment = experiment_tag(
-                "neutral",
+                base,
                 {"epochs": args.epochs, "wd": args.weight_decay,
                  "es": args.early_stop_patience},
                 {"epochs": 30, "wd": 0.0, "es": None})

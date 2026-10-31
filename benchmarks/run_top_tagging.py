@@ -100,8 +100,9 @@ def main(argv: list[str] | None = None) -> int:
                         "constituents mode only.")
     p.add_argument("--max-train-samples", type=int, default=None,
                    help="Cap the number of canonical-train jets (memory/time); "
-                        "val and test are always loaded in full. Only used "
-                        "with --canonical-splits.")
+                        "test is always loaded in full, and val too (or, if the "
+                        "val file is missing, a fixed 5%% of the capped train). "
+                        "Only used with --canonical-splits.")
     p.add_argument("--connection-cap", type=_cap_arg, default="auto",
                    help="Architecture-B connection cap: 'auto' (default; provably "
                         "blow-up-free for the training-constituent norms), 'off' "
@@ -133,11 +134,16 @@ def main(argv: list[str] | None = None) -> int:
                                       n_classes=2, name="top_tagging_synthetic",
                                       seed=seed)
             epochs = 5
-            experiment = "top_tagging_quick"
+            experiment = experiment_tag(
+                "top_tagging_quick",
+                {"wd": args.weight_decay, "es": args.early_stop_patience},
+                {"wd": 0.0, "es": None})
             rep = "flat"
         elif args.representation == "constituents":
-            # The canonical split is fixed, so it is loaded once; the internal
-            # 70/15/15 split depends on the seed and is reloaded per seed.
+            # The canonical split (including the fixed val carve when the val
+            # file is missing) does not depend on the seed, so it is loaded
+            # once; the internal 70/15/15 split depends on the seed and is
+            # reloaded per seed.
             if split is None or not args.canonical_splits:
                 split = load_top_tagging_constituents(
                     cache_dir=args.cache_dir, max_samples=args.max_samples,

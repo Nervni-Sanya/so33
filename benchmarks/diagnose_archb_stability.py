@@ -46,24 +46,26 @@ import torch
 import torch.nn as nn
 
 from so33.activation import BOOST_GROWTH_CONST, safe_connection_cap
-from benchmarks.models import build_model, max_constituent_norm
+from benchmarks.models import SET_MODELS, build_model, max_constituent_norm
 from benchmarks.provenance import run_metadata
 from benchmarks.synthetic import massless_jet_split
 from benchmarks.train import so33_activations
 
 
 def _load(args):
-    cache = pathlib.Path(args.cache_dir) if args.cache_dir else None
-    if cache is not None and any(cache.glob("top_tagging_*.npz")):
+    if args.cache_dir:
         from benchmarks.datasets import load_top_tagging_constituents
-        return load_top_tagging_constituents(
-            cache, max_samples=args.max_samples, n_constituents=args.n_constituents,
-            seed=args.seed, normalize="global",
-            use_canonical_splits=args.canonical_splits,
-            max_train_samples=args.max_train_samples,
-        ), "real"
-    if cache is not None:
-        print(f"[stability] no top_tagging_*.npz under {cache}; using toy massless jets")
+        try:
+            # Same loader as the runners (npz, parquet or h5 files).
+            return load_top_tagging_constituents(
+                args.cache_dir, max_samples=args.max_samples,
+                n_constituents=args.n_constituents, seed=args.seed, normalize="global",
+                use_canonical_splits=args.canonical_splits,
+                max_train_samples=args.max_train_samples,
+            ), "real"
+        except FileNotFoundError as e:
+            print(f"[stability] no top-tagging data under {args.cache_dir} ({e}); "
+                  f"using toy massless jets")
     return massless_jet_split(args.toy_jets, args.n_constituents, seed=args.seed), "toy"
 
 
@@ -147,7 +149,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-train-samples", type=int, default=None)
     p.add_argument("--n-constituents", type=int, default=32)
     p.add_argument("--toy-jets", type=int, default=20_000)
-    p.add_argument("--model", type=str, default="so33_equivariant_eta_bounded")
+    p.add_argument("--model", default="so33_equivariant_eta_bounded",
+                   choices=[n for n in SET_MODELS if n.startswith("so33_equivariant")],
+                   help="Architecture-B variant to probe.")
     p.add_argument("--steps", type=int, default=300)
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--lr", type=float, default=3e-3)

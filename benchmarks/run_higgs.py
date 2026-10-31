@@ -70,7 +70,10 @@ def main(argv: list[str] | None = None) -> int:
                                       n_classes=2, name="higgs_synthetic",
                                       seed=seed)
             epochs = 5
-            experiment = "higgs_quick"
+            experiment = experiment_tag(
+                "higgs_quick",
+                {"wd": args.weight_decay, "es": args.early_stop_patience},
+                {"wd": 0.0, "es": None})
         else:
             split = load_higgs(cache_dir=args.cache_dir,
                                max_samples=args.max_samples,

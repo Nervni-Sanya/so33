@@ -114,6 +114,9 @@ def test_architecture_b_record_has_stability_and_equivariance(toy_split, tmp_pat
     scores = np.load(tmp_path / "toy__so33_equivariant_eta_bounded__seed0__scores.npz")
     assert len(scores["scores"]) == len(toy_split.y_test)
     assert np.array_equal(scores["labels"], toy_split.y_test.numpy())
+    from sklearn.metrics import roc_auc_score     # scores[i] belongs to test jet i
+    assert roc_auc_score(scores["labels"], scores["scores"]) == pytest.approx(
+        b["test_metrics"]["test_auc"], abs=1e-6)
 
 
 def test_connection_cap_off_keeps_the_legacy_cap(toy_split, tmp_path):
@@ -155,3 +158,56 @@ def test_results_do_not_depend_on_the_global_rng_state(tmp_path):
         recs.append(json.loads((out / "toy_flat__so33__seed0.json").read_text()))
     assert recs[0]["test_metrics"] == recs[1]["test_metrics"]
     assert recs[0]["so33"]["coeffs"] == recs[1]["so33"]["coeffs"]
+
+
+def test_canonical_seed_rerun_reproduces_the_multi_seed_record(tmp_path):
+    """Without a canonical val file a fixed 5% of train is held out, so
+    `--seed 1` alone gives the same record as seed 1 of `--seeds 0-1`."""
+    data = tmp_path / "data"
+    data.mkdir()
+    _make_npz(data / "top_tagging_train.npz", 200, 0)      # no val file
+    _make_npz(data / "top_tagging_test.npz", 80, 2)
+    from benchmarks.run_top_tagging import main
+    common = ["--cache-dir", str(data), "--representation", "constituents",
+              "--canonical-splits", "--models", "relu_bottleneck", "--epochs", "1",
+              "--n-constituents", "8"]
+    assert main(common + ["--seeds", "0-1", "--results-dir", str(tmp_path / "multi")]) == 0
+    assert main(common + ["--seed", "1", "--results-dir", str(tmp_path / "single")]) == 0
+    name = "top_tagging_canonical-k_8-epochs_1__relu_bottleneck__seed1.json"
+    multi = json.loads((tmp_path / "multi" / name).read_text())
+    single = json.loads((tmp_path / "single" / name).read_text())
+    assert multi["test_metrics"] == single["test_metrics"]
+    assert multi["n_train"] == single["n_train"] == 190
+
+
+def test_aggregate_renders_tagged_boost_ood_experiments():
+    from benchmarks.aggregate import group_by_experiment_model, render_boost_ood
+    recs = [{"experiment": exp, "model": "relu_mlp", "seed": 0, "n_params": 2306,
+             "id_auc": 1.0, "ood_auc": 0.95, "auc_gap": 0.05}
+            for exp in ("boost_ood", "boost_ood-cap_off")]
+    md = render_boost_ood(group_by_experiment_model(recs))
+    assert "## boost_ood\n" in md and "## boost_ood-cap_off" in md
+
+
+def test_adult_fallback_is_not_filed_as_adult(tmp_path, monkeypatch):
+    """If Adult cannot be fetched the loader falls back to breast cancer;
+    those runs must not land in the Adult ('neutral') experiment."""
+    import sklearn.datasets
+
+    def offline(*args, **kwargs):
+        raise OSError("offline")
+
+    monkeypatch.setattr(sklearn.datasets, "fetch_openml", offline)
+    from benchmarks.run_neutral import main
+    assert main(["--models", "relu_bottleneck", "--epochs", "1",
+                 "--results-dir", str(tmp_path)]) == 0
+    names = [q.name for q in tmp_path.glob("*.json")]
+    assert names == ["neutral_breast_cancer-epochs_1__relu_bottleneck__seed0.json"]
+
+
+def test_boost_ood_names_runs_with_non_default_bins(tmp_path):
+    from benchmarks.run_boost_ood import main
+    assert main(["--quick", "--models", "relu_mlp", "--rapidity-bin", "0.5",
+                 "--results-dir", str(tmp_path)]) == 0
+    names = sorted(q.name for q in tmp_path.glob("*.json"))
+    assert names == ["boost_ood-n_1000-epochs_5-bin_0.5__relu_mlp__seed0.json"]

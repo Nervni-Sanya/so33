@@ -250,10 +250,18 @@ def render_ood(groups: dict[tuple[str, str], list[dict]]) -> str:
 
 
 def render_boost_ood(groups: dict[tuple[str, str], list[dict]]) -> str:
-    """Boost-OOD table (Table 1): id / ood AUC and the gap, per model."""
+    """Boost-OOD tables (Table 1): id / ood AUC and the gap, per model, one
+    table per experiment ("boost_ood" and its tagged variants, e.g. the
+    --connection-cap off ablation)."""
+    experiments = sorted({exp for exp, _ in groups
+                          if exp == "boost_ood" or exp.startswith("boost_ood-")})
+    return "\n".join(_render_boost_ood_one(groups, exp) for exp in experiments)
+
+
+def _render_boost_ood_one(groups: dict[tuple[str, str], list[dict]], experiment: str) -> str:
     rows = []
     for (exp, model), all_recs in groups.items():
-        if exp != "boost_ood":
+        if exp != experiment:
             continue
         recs = [r for r in all_recs if not is_diverged(r)]
         n_div = len(all_recs) - len(recs)
@@ -269,7 +277,7 @@ def render_boost_ood(groups: dict[tuple[str, str], list[dict]]) -> str:
         return ""
     rows.sort(key=lambda r: -(r[4][0] if r[4] else -1))
     lines = [
-        "## boost_ood",
+        f"## {experiment}",
         "",
         "| model | n_seeds | params | id AUC | ood AUC | gap |",
         "|---|---:|---:|---:|---:|---:|",

@@ -411,6 +411,10 @@ def _stack_constituent_jets(
     return X, y, mask
 
 
+# Seed of the 5% validation carve when the canonical val file is missing.
+CANONICAL_VAL_CARVE_SEED = 0
+
+
 def load_top_tagging_constituents(
     cache_dir: pathlib.Path | str,
     max_samples: int | None = 100_000,
@@ -456,7 +460,10 @@ def load_top_tagging_constituents(
     makes a test-set AUC directly comparable to published numbers
     (LorentzNet, PELICAN, LGN). In that mode ``max_train_samples`` caps the
     training jets (memory/time), while val and test are loaded in full so
-    the reported test metric is on the complete canonical test set.
+    the reported test metric is on the complete canonical test set. ``seed``
+    only affects the internal split: if the canonical val file is missing,
+    a fixed 5% of the (capped) train is held out instead, independent of
+    ``seed``.
     """
     cache = pathlib.Path(cache_dir)
 
@@ -469,15 +476,17 @@ def load_top_tagging_constituents(
                 cache, None, n_constituents, split="val")
         except FileNotFoundError:
             # Some mirrors (dl4phys/top_tagging) do not ship the validation
-            # file. Val is only used for monitoring in our training loop
-            # (no early stopping; final model = last epoch), so carving a
-            # seeded 5% slice out of the canonical train is legitimate and
-            # keeps the TEST set — the only split that matters for
-            # comparability with published numbers — untouched and full.
-            print("[canonical] no val file found; holding out 5% of the "
-                  "canonical train for validation (test remains the full "
+            # file. Val is used for monitoring (and for --early-stop-patience
+            # when that is requested), so carving a 5% slice out of the
+            # canonical train is legitimate and keeps the TEST set — the only
+            # split that matters for comparability with published numbers —
+            # untouched and full. The carve uses a FIXED seed, not ``seed``:
+            # every run then trains on the same jets, so a seed re-run alone
+            # reproduces the record of the same seed in a multi-seed run.
+            print("[canonical] no val file found; holding out a fixed 5% of "
+                  "the canonical train for validation (test remains the full "
                   "canonical test set).")
-            g = torch.Generator().manual_seed(seed)
+            g = torch.Generator().manual_seed(CANONICAL_VAL_CARVE_SEED)
             perm = torch.randperm(len(Xtr), generator=g)
             n_val = max(1, int(0.05 * len(Xtr)))
             va_idx, tr_idx = perm[:n_val], perm[n_val:]

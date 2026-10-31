@@ -282,8 +282,11 @@ def main(argv: list[str] | None = None) -> int:
     experiment = experiment_tag(
         "boost_ood",
         {"n": args.n, "epochs": args.epochs, "train_rap": args.train_rapidity,
-         "ood_rap": args.ood_rapidity, "cap": args.connection_cap},
-        {"n": 20_000, "epochs": 40, "train_rap": 0.6, "ood_rap": 2.5, "cap": "auto"})
+         "ood_rap": args.ood_rapidity, "cap": args.connection_cap,
+         "bin": args.rapidity_bin, "probe_g": args.probe_groups,
+         "probe_rap": args.probe_rapidity},
+        {"n": 20_000, "epochs": 40, "train_rap": 0.6, "ood_rap": 2.5, "cap": "auto",
+         "bin": 0.25, "probe_g": 8, "probe_rap": 0.5})
     results_dir = pathlib.Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
     names = [n.strip() for n in args.models.split(",") if n.strip()]

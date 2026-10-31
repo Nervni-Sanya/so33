@@ -10,8 +10,9 @@ For an activation sigma, inputs x and group elements g it measures
     eps_m     = E_b | <sigma(x), sigma(x)>_eta - <sigma(g x), sigma(g x)>_eta |
 
 averaged over the g's. The flow conserves <v, v>_eta for every connection,
-so eps_m only tests whether the input bound is invariant; eps_sigma is
-the quantity that measures equivariance of the activation itself.
+so in exact arithmetic eps_m only tests whether the input bound is
+invariant (what remains is the integrator's conservation error); eps_sigma
+is the quantity that measures equivariance of the activation itself.
 """
 
 from __future__ import annotations

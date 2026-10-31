@@ -14,9 +14,11 @@ Two quantities are measured at each (||c||, bound) cell
   2. Readout-feature invariance error (eps_m)
        E_b [ | <sigma(x),sigma(x)>_eta - <sigma(gx),sigma(gx)>_eta | ]
 
-The flow conserves <v, v>_eta for every connection, so eps_m only tests
-whether the input bound is invariant; it is blind to the connection.
-eps_sigma measures equivariance of the activation itself, and is
+The flow conserves <v, v>_eta for every connection, so in exact arithmetic
+eps_m only tests whether the input bound is invariant and is blind to the
+connection; its residual growth with ||c|| for bounds none / eta is the
+RK4 conservation error (step 0.03; it falls as h^4 when the step is
+halved). eps_sigma measures equivariance of the activation itself, and is
 non-zero for every c != 0 whatever the bound. The figure shows both.
 Cells whose flow overflowed (non-finite or > 1e3) are drawn as crosses
 on the top edge instead of being dropped.
