@@ -149,7 +149,9 @@ equivariance.
   beams in the jet's longitudinal rest frame by default, deviations listed in
   `benchmarks/lorentznet.py`; do not combine it with `--early-stop-patience`);
   `benchmarks/run_jet_baselines.py` (jet mass, mass window −|M−172.5 GeV|, BDT on
-  (M, τ₃₂) with exclusive-kT axes); `benchmarks/run_efp_baseline.py` (linear Fisher
+  (M, τ₃₂) with exclusive-kT axes *without* minimisation — τ₂, τ₃ ~30% larger than
+  with the one-pass-minimised axes of LHC analyses, so a conservative τ₃₂ baseline);
+  `benchmarks/run_efp_baseline.py` (linear Fisher
   discriminant on energy flow polynomials, d ≤ 5 by default).
 - **`so33`, `so33_multi`, `so33_signature_only`, `so33_frozen`** — Deep Sets / bottleneck
   variants used in the tabular comparisons; `<relu|tanh|gelu>_mlp_w<H>` are MLPs of

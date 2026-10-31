@@ -22,12 +22,15 @@ window centre (``--mass-centre``, the top mass) is a physics input and is not
 tuned. The BDT is fitted on train alone, with random_state = ``--seed``; its early
 stopping monitors the log-loss on a stratified 10% of TRAIN (scikit-learn's
 validation_fraction = 0.1, n_iter_no_change = 20; at most ``--bdt-max-iter`` =
-500 trees of at most 31 leaves, learning rate 0.1), so val plays the same part as
-for the networks (monitoring and the accuracy cut) and test is used once. For
-every score the accuracy threshold is the cut that maximises the val accuracy
-(``run_efp_baseline.best_threshold``) and test_acc is the test accuracy at that
-same cut; test_auc and 1/eps_B at eps_S = 0.3 / 0.5 are
-``tabular_runner.binary_metrics``. The referee's numbers on the canonical test
+500 trees of at most 31 leaves, learning rate 0.1), so val is only used for
+the accuracy cut and test is used once. For every score the accuracy threshold
+is the cut that maximises the val accuracy (``run_efp_baseline.best_threshold``)
+and test_acc is the test accuracy at that same cut; test_auc and 1/eps_B at
+eps_S = 0.3 / 0.5 are ``tabular_runner.binary_metrics``. The networks'
+test_acc is the argmax of their logits (no tuned cut), so only AUC and 1/eps_B
+are like-for-like across the two kinds of rows. walltime_sec counts the
+observable computation only when it was not loaded from ``--cache-observables``
+(the record's "observables" block has the timings). The referee's numbers on the canonical test
 set at K = 32, for comparison: mass window AUC 0.941 and 1/eps_B = 39.7; M_jet
 alone 0.921 and 17.7.
 
@@ -65,6 +68,7 @@ from typing import Any
 
 import numpy as np
 
+from benchmarks import jet_observables as jo
 from benchmarks.datasets import DatasetSplit
 from benchmarks.jet_observables import (
     AXES, BETA, CHUNK_JETS, OBSERVABLES, R0, RATIO_IF_ZERO, compute_jet_observables,
@@ -90,8 +94,12 @@ CACHE_FORMAT = 1
 # ─────────────────────────────────────────────────────────────────────────
 
 def observable_cache_key(split: DatasetSplit, fingerprint: str) -> dict[str, Any]:
-    """Everything a cache of jet observables must match."""
-    return {"format": CACHE_FORMAT, "observables": list(OBSERVABLES),
+    """Everything a cache of jet observables must match, including a hash of
+    the code that computes them (a cache made by older clustering code is
+    refused rather than silently reused)."""
+    import hashlib
+    code = hashlib.sha256(pathlib.Path(jo.__file__).read_bytes()).hexdigest()
+    return {"format": CACHE_FORMAT, "code_sha256": code, "observables": list(OBSERVABLES),
             "beta": BETA, "r0": R0, "axes": AXES, "ratio_if_zero": RATIO_IF_ZERO,
             "n_constituents": int(split.X_train.shape[1]),
             "sizes": [len(split.X_train), len(split.X_val), len(split.X_test)],
@@ -207,9 +215,10 @@ def fit_bdt(F_train: np.ndarray, y_train: np.ndarray, settings: dict[str, Any],
     """HistGradientBoostingClassifier on train, early-stopped on a stratified
     ``validation_fraction`` of train (scikit-learn's own split, seeded)."""
     from sklearn.ensemble import HistGradientBoostingClassifier
+    # The default loss is the binary log-loss in every scikit-learn version
+    # (named "auto" before 1.1, "log_loss" since), so it is not passed.
     clf = HistGradientBoostingClassifier(
-        loss="log_loss", early_stopping=True, scoring="loss",
-        random_state=seed, **settings)
+        early_stopping=True, scoring="loss", random_state=seed, **settings)
     return clf.fit(F_train, y_train)
 
 

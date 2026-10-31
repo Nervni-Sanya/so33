@@ -17,7 +17,7 @@ in blocks of jets so that the memory stays bounded for the ~2M canonical jets.
 Kinematics. pT = hypot(px, py), phi = atan2(py, px) in (-pi, pi] and the
 rapidity y = 0.5 log((E + pz) / (E - pz)), evaluated as in FastJet's PseudoJet:
 y = sign(pz) log((E + |pz|) / mT) with mT^2 = pT^2 + max(m^2, 0). That is the
-same number whenever E > |pz|, and it stays finite for the float32-rounded
+same number whenever m^2 >= 0, and it stays finite for the float32-rounded
 massless constituents of the data, whose E can come out at or below |pz|
 (their slightly negative m^2 is clamped to 0, which gives y = eta). Padding,
 and a particle with pT = 0 along the beam, gets y = 0 and never enters a
@@ -40,9 +40,9 @@ tau_1, tau_2 and tau_3 come from one clustering pass that records the
 pseudojets when 3, 2 and 1 of them remain. These are exclusive-kT axes with
 NO one-pass minimisation (not OnePass_KT_Axes) and no winner-take-all
 recombination. A jet with at most N such constituents has tau_N = 0 (every
-constituent is its own axis; FastJet would pad the axes with zero vectors and
-warn that the result is unpredictable). The ratios are set to 1 when their
-denominator vanishes ("the extra axis does not help"): tau_{N-1} = 0 only
+constituent is its own axis), as the official Nsubjettiness contrib returns.
+The ratios are set to 1 when their denominator vanishes (the contrib gives
+0/0 = NaN; here "the extra axis does not help"): tau_{N-1} = 0 only
 happens for a jet with fewer than N constituents (or exactly collinear ones),
 and then tau_N = 0 as well.
 

@@ -567,3 +567,71 @@ def test_experiment_and_model_names_follow_run_top_tagging():
                                   bdt_max_leaf_nodes=15))
     assert names["mass_window"] == "mass_window-centre_175.0"
     assert names["bdt"] == "bdt_mass_tau32-iter_100-leaves_15"
+
+
+
+def _leading_constituents(path, k=32):
+    z = np.load(path)
+    X = np.stack([select_leading_constituents(c, k) for c in z["constituents"]]).astype(np.float64)
+    mask = (np.abs(X).sum(-1) > 0).astype(np.float64)
+    return X, mask, z["labels"].astype(np.int64)
+
+
+def test_runner_protocol_invariants(tmp_path, monkeypatch):
+    """Pins the protocol: the accuracy cut is searched on VAL only; the BDT
+    is the HistGradientBoosting fit on TRAIN (M, tau32) with random_state =
+    --seed (an independent rebuild reproduces the saved test scores and the
+    number of trees); val_auc is the val AUC of the same scores."""
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from sklearn.metrics import roc_auc_score
+    data, res = tmp_path / "data", tmp_path / "res"
+    data.mkdir()
+    for name, n, seed in (("train", 400, 10), ("val", 150, 11), ("test", 200, 12)):
+        _write_kasieczka_file(data / f"top_tagging_{name}.npz", n, seed)
+    tr, va, te = (_leading_constituents(data / f"top_tagging_{s}.npz")
+                  for s in ("train", "val", "test"))
+
+    seen = []
+    orig = rjb.best_threshold
+    monkeypatch.setattr(rjb, "best_threshold",
+                        lambda s, y: (seen.append(np.asarray(y).copy()), orig(s, y))[1])
+    seed = 3
+    assert rjb.main(["--cache-dir", str(data), "--results-dir", str(res),
+                     "--canonical-splits", "--save-scores", "--seed", str(seed)]) == 0
+    assert len(seen) == 3 and all(np.array_equal(y, va[2]) for y in seen)
+
+    feats = []
+    for X, mask, _ in (tr, va, te):
+        o = jo.compute_jet_observables(X, mask, verbose=False)
+        feats.append(np.column_stack([o["mass"], o["tau32"]]))
+    clf = HistGradientBoostingClassifier(early_stopping=True, scoring="loss",
+                                         random_state=seed, **rjb.BDT_DEFAULTS).fit(feats[0], tr[2])
+    z = np.load(res / "top_tagging_canonical__bdt_mass_tau32__seed3__scores.npz")
+    np.testing.assert_allclose(z["scores"], clf.decision_function(feats[2]).astype(np.float32),
+                               rtol=1e-6, atol=1e-6)
+    recs = _records(res, "top_tagging_canonical", seed=seed)
+    bdt = recs["bdt_mass_tau32"]
+    assert bdt["config"]["bdt"]["random_state"] == seed
+    assert bdt["bdt"]["n_iter"] == clf.n_iter_
+    assert bdt["train_metrics"]["val_auc"] == pytest.approx(
+        roc_auc_score(va[2], clf.decision_function(feats[1])), abs=1e-9)
+
+
+def test_experiment_names_match_the_neural_runner(tmp_path):
+    """Jet-observable rows must land in the same table as the networks: the
+    real run_top_tagging and run_jet_baselines name the same data options alike."""
+    from benchmarks.run_top_tagging import main as top_main
+    data = tmp_path / "data"
+    data.mkdir()
+    for name, n, seed in (("train", 200, 10), ("val", 60, 11), ("test", 80, 12)):
+        _write_kasieczka_file(data / f"top_tagging_{name}.npz", n, seed)
+    for extra in ([], ["--n-constituents", "16"], ["--max-train-samples", "100"]):
+        nn_dir, jo_dir = tmp_path / ("nn" + "_".join(extra)), tmp_path / ("jo" + "_".join(extra))
+        assert top_main(["--cache-dir", str(data), "--representation", "constituents",
+                         "--canonical-splits", "--models", "relu_bottleneck",
+                         "--results-dir", str(nn_dir)] + extra) == 0
+        assert rjb.main(["--cache-dir", str(data), "--canonical-splits",
+                         "--results-dir", str(jo_dir)] + extra) == 0
+        nn_exp = {json.loads(q.read_text())["experiment"] for q in nn_dir.glob("*.json")}
+        jo_exp = {json.loads(q.read_text())["experiment"] for q in jo_dir.glob("*.json")}
+        assert nn_exp == jo_exp, (extra, nn_exp, jo_exp)
