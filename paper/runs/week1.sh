@@ -79,9 +79,23 @@ for s in 0 1 2; do   # observables are clustered once and cached; only the BDT d
         --cache-observables data/jet_observables_canonical.npz
 done
 python -m benchmarks.run_efp_baseline --canonical-splits --save-scores --n-jobs 4 \
-    --cache-efps data/efps_canonical_d5.npz
+    --cache-efps data/efps_canonical_d5.npz          # ~8-9 GB peak RAM (svd LDA fit)
 python -m benchmarks.figure_toptag_mass --cache-dir data --canonical-splits \
     --scores "Readout A=results/top_tagging_canonical__eta_invariants__seed0__scores.npz"
+
+echo "=== Canonical protocol with 300k training jets: one table with Architecture B and LorentzNet ==="
+# Architecture B and LorentzNet above are trained on 300k jets (experiment
+# top_tagging_canonical-ntrain_300000); run the cheaper models there too, so the
+# aggregate puts every model in the same table (val and test stay full).
+python -m benchmarks.run_top_tagging --representation constituents --canonical-splits \
+    --models eta_invariants,relu_bottleneck,pfn,efn --epochs 30 --seeds 0-2 --save-scores \
+    --max-train-samples 300000
+for s in 0 1 2; do
+    python -m benchmarks.run_jet_baselines --canonical-splits --max-train-samples 300000 \
+        --save-scores --seed "$s" --cache-observables data/jet_observables_canonical_300k.npz
+done
+python -m benchmarks.run_efp_baseline --canonical-splits --max-train-samples 300000 \
+    --save-scores --n-jobs 4 --cache-efps data/efps_canonical_300k_d5.npz
 
 echo
 echo "Done. Aggregate with:"

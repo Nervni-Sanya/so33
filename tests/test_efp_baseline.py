@@ -379,3 +379,183 @@ def test_missing_energyflow_fails_with_install_hint(monkeypatch, tmp_path, capsy
     assert rc == 2
     assert "pip install energyflow" in capsys.readouterr().err
     assert not (tmp_path / "res").exists()
+
+
+# ───────────────────────── review additions: pin the protocol ─────────────────────────
+
+def test_runner_protocol_invariants(ef, tmp_path, monkeypatch):
+    """The tests above pin the physics, not the protocol. An independent scikit-learn
+    rebuild must reproduce the saved test scores, the cut and the val metrics: scaler and
+    Fisher discriminant fitted on TRAIN only, score = decision_function, accuracy cut
+    searched on VAL only, --n-constituents reaching the loader."""
+    from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+    from sklearn.metrics import roc_auc_score
+    from sklearn.preprocessing import StandardScaler
+    data, res = tmp_path / "data", tmp_path / "res"
+    data.mkdir()
+    for name, n, seed in (("train", 400, 10), ("val", 150, 11), ("test", 200, 12)):
+        _write_kasieczka_file(data / f"top_tagging_{name}.npz", n, seed)
+    K, dmax = 16, 3
+    from benchmarks.datasets import load_top_tagging_constituents
+    split = load_top_tagging_constituents(          # the real loader, not efp.load_split
+        cache_dir=data, n_constituents=K, standardise=False, normalize="none",
+        use_canonical_splits=True)
+    efpset = efp.make_efpset(dmax, 0.5)
+    F = [efp.compute_efps(X.numpy(), efpset)
+         for X in (split.X_train, split.X_val, split.X_test)]
+    y = [t.numpy().astype(np.int64) for t in (split.y_train, split.y_val, split.y_test)]
+    scaler = StandardScaler().fit(F[0])
+    lda = LinearDiscriminantAnalysis(solver="svd").fit(scaler.transform(F[0]), y[0])
+    s = [lda.decision_function(scaler.transform(f)) for f in F]
+    thr, val_acc = efp.best_threshold(s[1], y[1])
+
+    seen, orig = [], efp.best_threshold
+    monkeypatch.setattr(efp, "best_threshold",
+                        lambda sc, yy: (seen.append(np.asarray(yy).copy()), orig(sc, yy))[1])
+    assert efp.main(["--cache-dir", str(data), "--results-dir", str(res),
+                     "--canonical-splits", "--dmax", str(dmax),
+                     "--n-constituents", str(K), "--save-scores"]) == 0
+    assert len(seen) == 1 and np.array_equal(seen[0], y[1])      # the cut sees val labels only
+    stem = f"top_tagging_canonical-k_{K}__efp_linear_d{dmax}__seed0"
+    r = _record(res, stem)
+    z = np.load(res / f"{stem}__scores.npz")
+    np.testing.assert_allclose(z["scores"], s[2].astype(np.float32), rtol=1e-5, atol=1e-5)
+    assert r["efp"]["val_threshold"] == pytest.approx(thr, rel=1e-6, abs=1e-6)
+    assert r["train_metrics"]["final_val_acc"] == pytest.approx(val_acc)
+    assert r["train_metrics"]["val_auc"] == pytest.approx(roc_auc_score(y[1], s[1]), abs=1e-9)
+    assert r["efp"]["train_auc"] == pytest.approx(roc_auc_score(y[0], s[0]), abs=1e-9)
+    assert r["test_metrics"]["test_acc"] == pytest.approx(((s[2] > thr) == y[2]).mean())
+
+
+def test_lda_options_reach_the_classifier(ef, tmp_path):
+    """--lda-solver / --lda-shrinkage (the documented route for d = 7) are not no-ops."""
+    from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+    from sklearn.preprocessing import StandardScaler
+    split = efp.toy_jet_split(300, 32, seed=0)
+    efpset = efp.make_efpset(3, 0.5)
+    F = [efp.compute_efps(X.numpy(), efpset)
+         for X in (split.X_train, split.X_val, split.X_test)]
+    scaler = StandardScaler().fit(F[0])
+    for shrinkage, cli, model in ((None, [], "efp_linear_d3-lda_lsqr"),
+                                  ("auto", ["--lda-shrinkage", "auto"],
+                                   "efp_linear_d3-lda_lsqr-shrink_auto"),
+                                  (0.3, ["--lda-shrinkage", "0.3"],
+                                   "efp_linear_d3-lda_lsqr-shrink_0.3")):
+        res = tmp_path / model
+        assert efp.main(["--toy-jets", "300", "--dmax", "3", "--save-scores",
+                         "--results-dir", str(res), "--lda-solver", "lsqr"] + cli) == 0
+        lda = LinearDiscriminantAnalysis(solver="lsqr", shrinkage=shrinkage).fit(
+            scaler.transform(F[0]), split.y_train.numpy())
+        want = lda.decision_function(scaler.transform(F[2])).astype(np.float32)
+        z = np.load(res / f"toy_jets__{model}__seed0__scores.npz")
+        np.testing.assert_allclose(z["scores"], want, rtol=1e-4, atol=1e-4)
+
+
+def test_internal_split_follows_the_seed(ef, tmp_path):
+    """run_top_tagging splits the jets with the run's seed; so must the EFP runner."""
+    data = tmp_path / "data"
+    data.mkdir()
+    for name, n, seed in (("train", 240, 10), ("val", 80, 11), ("test", 120, 12)):
+        _write_kasieczka_file(data / f"top_tagging_{name}.npz", n, seed)
+    labels = {}
+    for seed in (0, 2):
+        res = tmp_path / f"res{seed}"
+        assert efp.main(["--cache-dir", str(data), "--results-dir", str(res), "--dmax", "2",
+                         "--max-samples", "300", "--seed", str(seed), "--save-scores"]) == 0
+        z = np.load(res / f"top_tagging_constituents-n_300__efp_linear_d2__seed{seed}__scores.npz")
+        from benchmarks.datasets import load_top_tagging_constituents
+        want = load_top_tagging_constituents(
+            cache_dir=data, max_samples=300, seed=seed, standardise=False,
+            normalize="none").y_test.numpy()
+        assert np.array_equal(z["labels"], want)
+        labels[seed] = z["labels"]
+    assert not np.array_equal(labels[0], labels[2])               # the seed matters here
+
+
+def test_jets_to_events_keeps_every_leading_constituent():
+    rng = np.random.default_rng(0)
+    counts = [32, 20, 5]
+    X = np.zeros((3, 32, 5))
+    for i, m in enumerate(counts):
+        p = rng.normal(size=(m, 3)) * 30.0
+        X[i, :m, 0] = np.sqrt((p ** 2).sum(axis=1))               # massless
+        X[i, :m, 1:4] = p
+        X[i, :m, 4] = 1.0
+    events = efp.jets_to_events(X)
+    assert [len(e) for e in events] == counts
+    for i, e in enumerate(events):
+        np.testing.assert_allclose(e[:, 0].sum(), np.hypot(X[i, :, 1], X[i, :, 2]).sum())
+
+
+def test_data_fingerprint_covers_every_split():
+    import dataclasses
+    split = efp.toy_jet_split(60, 8, seed=0)
+    base = efp.data_fingerprint(split)
+    for name in ("X_train", "y_train", "X_val", "y_val", "X_test", "y_test"):
+        t = getattr(split, name).clone()
+        t.view(-1)[0] += 1
+        changed = dataclasses.replace(split, **{name: t})
+        assert efp.data_fingerprint(changed) != base, name
+
+
+def test_experiment_names_match_the_neural_runner(ef, tmp_path):
+    """The EFP row must land in the same table as the networks: run the REAL
+    run_top_tagging and the EFP runner with the same data options and compare names
+    (the name test above re-encodes run_top_tagging's rule, so it cannot notice drift)."""
+    from benchmarks.run_top_tagging import main as top_main
+    data = tmp_path / "data"
+    data.mkdir()
+    for name, n, seed in (("train", 200, 10), ("val", 60, 11), ("test", 80, 12)):
+        _write_kasieczka_file(data / f"top_tagging_{name}.npz", n, seed)
+    for extra in ([], ["--n-constituents", "16"], ["--max-train-samples", "100"],
+                  ["--n-constituents", "16", "--max-train-samples", "100"]):
+        tag = "_".join(extra) or "default"
+        nn_dir, ef_dir = tmp_path / ("nn" + tag), tmp_path / ("ef" + tag)
+        assert top_main(["--cache-dir", str(data), "--representation", "constituents",
+                         "--canonical-splits", "--models", "relu_bottleneck",
+                         "--results-dir", str(nn_dir)] + extra) == 0
+        assert efp.main(["--cache-dir", str(data), "--canonical-splits", "--dmax", "2",
+                         "--results-dir", str(ef_dir)] + extra) == 0
+        nn_exp = {json.loads(q.read_text())["experiment"] for q in nn_dir.glob("*.json")}
+        ef_exp = {json.loads(q.read_text())["experiment"] for q in ef_dir.glob("*.json")}
+        assert nn_exp == ef_exp, (extra, nn_exp, ef_exp)
+
+
+# ───────────────────────── review additions: fail on HEAD, pass after the fixes ─────────────────────────
+
+def test_efp_cache_is_refused_when_the_feature_code_changed(ef, tmp_path, monkeypatch):
+    """The cache key must follow the code that computes the EFPs, not only constants."""
+    cache = tmp_path / "efps.npz"
+    toy = ["--toy-jets", "200", "--dmax", "3", "--cache-efps", str(cache),
+           "--results-dir", str(tmp_path / "res")]
+    orig = efp.p4_to_ptyphi
+
+    def other_rapidity(p4):                   # a different feature computation
+        out = orig(p4)
+        out[:, 1] *= 1.5
+        return out
+
+    monkeypatch.setattr(efp, "p4_to_ptyphi", other_rapidity)
+    assert efp.main(toy) == 0                 # writes the cache with the other code
+    monkeypatch.setattr(efp, "p4_to_ptyphi", orig)
+    before = cache.read_bytes()
+    with pytest.raises(ValueError, match="different setting"):
+        efp.main(toy)
+    assert cache.read_bytes() == before
+
+
+def test_lda_keeps_the_near_degenerate_discriminating_directions():
+    """The EFP basis is extremely collinear and the signal sits in the small-variance
+    directions (see the module docstring). energyflow's own Fisher discriminant
+    (energyflow/archs/linear.py: LinearDiscriminantAnalysis(solver='svd', tol=1e-12))
+    keeps them; scikit-learn's default tol = 1e-4 discards every direction whose
+    within-class correlation singular value is below 1e-4."""
+    from sklearn.metrics import roc_auc_score
+    rng = np.random.default_rng(0)
+    n = 4000
+    y = rng.integers(0, 2, n)
+    f1 = rng.normal(size=n)
+    f2 = f1 + 1e-6 * (rng.normal(size=n) + 3.0 * y)     # all the signal is in f2 - f1
+    F = np.column_stack([f1, f2])
+    scaler, lda = efp.fit_linear_discriminant(F, y)
+    assert roc_auc_score(y, efp.lda_scores(scaler, lda, F)) > 0.95

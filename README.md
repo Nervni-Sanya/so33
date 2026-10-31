@@ -152,7 +152,9 @@ equivariance.
   (M, τ₃₂) with exclusive-kT axes *without* minimisation — τ₂, τ₃ ~30% larger than
   with the one-pass-minimised axes of LHC analyses, so a conservative τ₃₂ baseline);
   `benchmarks/run_efp_baseline.py` (linear Fisher
-  discriminant on energy flow polynomials, d ≤ 5 by default).
+  discriminant on energy flow polynomials, d ≤ 5 by default). The jet-observable /
+  EFP rows report accuracy at a cut tuned on val, the networks the argmax of their
+  logits: compare AUC and 1/ε_B across the two kinds of rows, not accuracy.
 - **`so33`, `so33_multi`, `so33_signature_only`, `so33_frozen`** — Deep Sets / bottleneck
   variants used in the tabular comparisons; `<relu|tanh|gelu>_mlp_w<H>` are MLPs of
   width H (e.g. `tanh_mlp_w24`, the Adult control at the `so33_multi` parameter count).

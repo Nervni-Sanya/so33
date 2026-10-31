@@ -25,17 +25,24 @@ parameters: 13 / 102 / 1000 for d <= 3 / 5 / 7, which are the EFP counts the
 paper quotes (they include d = 0).
 
 The EFPs are standardised with train statistics and a Fisher linear
-discriminant (scikit-learn ``LinearDiscriminantAnalysis``, as in the paper) is
-fitted on train. Its decision function is the jet score (test AUC, 1/eps_B at
-eps_S = 0.3 / 0.5); the accuracy threshold is the one that maximises val
-accuracy. Solver: scikit-learn's default ``svd``, without shrinkage. The EFP
-basis is extremely collinear (on 4k toy jets the standardised within-class
-covariance of the d <= 5 EFPs has condition number ~1e14), and the
-discriminating information sits in the near-degenerate directions:
-Ledoit-Wolf shrinkage (``--lda-solver lsqr --lda-shrinkage auto``) lowered the
-toy test AUC from 0.995 to 0.982. The svd solver holds ~5 copies of the
-(n_train, n_EFP) matrix in memory. For d = 7 on a large train set use
-``--lda-solver lsqr``, which needs only the per-class p x p covariances.
+discriminant (scikit-learn ``LinearDiscriminantAnalysis``, as energyflow's
+LinearClassifier for the paper) is fitted on train. Its decision function is
+the jet score (test AUC, 1/eps_B at eps_S = 0.3 / 0.5); the accuracy
+threshold is the one that maximises val accuracy, so this row's
+final_val_acc / test_acc use a val-tuned cut while the networks' accuracy is
+an argmax: only AUC and 1/eps_B are like-for-like. Solver: ``svd`` with rank
+tolerance 1e-12 (``LDA_TOL``, energyflow's choice; scikit-learn's default
+1e-4 would discard about 44 of the 101 d <= 5 directions), without
+shrinkage. The EFP basis is extremely collinear (the standardised
+within-class correlation of the d <= 5 EFPs has condition number ~5e13), and
+the discriminating information sits in the near-degenerate directions:
+Ledoit-Wolf shrinkage (``--lda-solver lsqr --lda-shrinkage auto``) lowered
+the toy test AUC from 0.995 to 0.982. The svd fit needs ~6 copies of the
+(n_train, n_EFP) matrix (d <= 5 on the full canonical train: ~8-9 GB peak).
+For d = 7 on a large train set use ``--lda-solver lsqr`` (~1.2 copies;
+without shrinkage it is the same pseudo-inverse as svd with tol 1e-12).
+walltime_sec counts the EFP computation only when it was not loaded from
+``--cache-efps``; with ``--n-jobs`` it is wall-clock time.
 
 Departures from the paper: d <= 5 by default (the paper uses d <= 7; the EFPs
 of one jet cost ~5 ms per core at d <= 5 and ~90 ms at d <= 7, i.e. ~3 and
@@ -92,6 +99,7 @@ COORDS = "ptyphim"         # energyflow input rows (pT, y, phi)
 DEFAULT_DMAX = 5
 DEFAULT_BETA = 0.5         # the paper's choice for top tagging (its Fig. 10)
 DEFAULT_SOLVER = "svd"
+LDA_TOL = 1e-12            # svd rank threshold, as energyflow's LinearClassifier (scikit-learn: 1e-4)
 CHUNK_JETS = 10_000        # jets per batch_compute call (bounds memory)
 CACHE_FORMAT = 1
 SPEC_COLS = ("n", "e", "d", "v", "k", "c", "p", "h")   # energyflow EFPSet.cols
@@ -200,9 +208,21 @@ def data_fingerprint(split: DatasetSplit) -> str:
     return h.hexdigest()
 
 
+def _feature_code_sha256() -> str:
+    """sha256 of the source of the functions that turn jets into EFPs: a cache made by
+    other feature code is refused rather than silently reused."""
+    import inspect
+    h = hashlib.sha256()
+    for fn in (p4_to_ptyphi, jets_to_events, make_efpset, compute_efps):
+        h.update(inspect.getsource(fn).encode())
+    return h.hexdigest()
+
+
 def _cache_key(split: DatasetSplit, beta: float, fingerprint: str) -> dict[str, Any]:
     """Everything an EFP cache must match, apart from dmax (a larger one is subset)."""
     return {"format": CACHE_FORMAT, "measure": MEASURE, "beta": float(beta),
+            "code_sha256": _feature_code_sha256(),
+            "energyflow": import_energyflow().__version__,
             "kappa": KAPPA, "normed": True, "coords": COORDS,
             "n_constituents": int(split.X_train.shape[1]),
             "sizes": [len(split.X_train), len(split.X_val), len(split.X_test)],
@@ -271,9 +291,7 @@ def efp_features(split: DatasetSplit, dmax: int, beta: float, n_jobs: int = 1,
                  for name, X in (("train", split.X_train), ("val", split.X_val),
                                  ("test", split.X_test))]
         if path is not None:
-            version = import_energyflow().__version__
-            save_efp_cache(path, feats, specs,
-                           {**key, "dmax": int(dmax), "energyflow": version})
+            save_efp_cache(path, feats, specs, {**key, "dmax": int(dmax)})
             print(f"[{label}] EFPs cached in {path}")
     for name, F in zip(("train", "val", "test"), feats):
         n_bad = int((~np.isfinite(F)).any(axis=1).sum())
@@ -309,7 +327,7 @@ def fit_linear_discriminant(F_train: np.ndarray, y_train: np.ndarray,
     from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
     from sklearn.preprocessing import StandardScaler
     scaler = StandardScaler().fit(F_train)
-    lda = LinearDiscriminantAnalysis(solver=solver, shrinkage=shrinkage)
+    lda = LinearDiscriminantAnalysis(solver=solver, shrinkage=shrinkage, tol=LDA_TOL)
     lda.fit(scaler.transform(F_train), y_train)
     return scaler, lda
 
@@ -379,7 +397,10 @@ def load_split(args: argparse.Namespace) -> DatasetSplit:
 
 
 def experiment_name(args: argparse.Namespace) -> str:
-    """The experiment name ``run_top_tagging`` gives the same data options."""
+    """The experiment name ``run_top_tagging`` gives the same data options.
+
+    Toy runs (--toy-jets N) are smoke tests and are named "toy_jets" whatever
+    N is, so toy runs with different N overwrite each other."""
     options: dict[str, Any] = {"k": args.n_constituents}
     defaults: dict[str, Any] = {"k": 32}
     if args.toy_jets:
@@ -462,6 +483,8 @@ def main(argv: list[str] | None = None) -> int:
         p.error("--beta must be positive")
     if args.n_jobs < 1:
         p.error("--n-jobs must be >= 1")
+    if args.n_constituents < 2:
+        p.error("--n-constituents must be at least 2 (EFPs of a single particle are all 0)")
     if args.lda_solver == "svd" and args.lda_shrinkage is not None:
         p.error("--lda-shrinkage needs --lda-solver lsqr")
     if args.toy_jets is not None and args.toy_jets < 20:
@@ -525,6 +548,7 @@ def main(argv: list[str] | None = None) -> int:
             "efp_degrees": [1, args.dmax],
             "standardise": "train mean/std",
             "lda_solver": args.lda_solver, "lda_shrinkage": args.lda_shrinkage,
+            "lda_tol": LDA_TOL,
             "threshold": "max val accuracy",
             "n_constituents": args.n_constituents, "normalize": "none",
             "canonical_splits": args.canonical_splits,
