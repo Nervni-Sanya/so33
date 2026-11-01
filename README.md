@@ -24,7 +24,7 @@ a benchmark harness, and the source of an accompanying preprint
   (synthetic boost-OOD, HIGGS, Adult, top-tagging constituents), the published-tagger
   and jet-observable baselines, statistics and figure scripts.
 - **`paper/`** — the preprint (`main.tex`), figures, and the annotated result notes.
-- **`tests/`** — 103 tests: the basis, gradients against finite differences at the
+- **`tests/`** — 295 tests: the basis, gradients against finite differences at the
   experimental solver settings, conservation vs. equivariance, the input maps, RK4
   convergence order, the stability guarantee, the training/evaluation divergence
   guards, the published parameter counts, the data loaders, metrics, result records
@@ -195,7 +195,7 @@ python -m benchmarks.stats --experiment higgs --baseline relu_bottleneck
 ## Tests
 
 ```bash
-python -m pytest tests/ -v     # 103 tests, ~15 s
+python -m pytest tests/ -v     # 295 tests, ~1-2 min
 ```
 
 ## Paper

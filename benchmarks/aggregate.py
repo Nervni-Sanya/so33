@@ -32,9 +32,17 @@ def _mean_std(xs: list[float]) -> tuple[float, float]:
     n = len(xs)
     m = sum(xs) / n
     if n == 1:
-        return m, 0.0
+        return m, float("nan")      # the sample sd is undefined for one seed
     var = sum((x - m) ** 2 for x in xs) / (n - 1)
     return m, math.sqrt(var)
+
+
+def _pm(ms: tuple[float, float], fmt: str = ".3f", n_of: tuple[int, int] | None = None,
+        signed: bool = False) -> str:
+    """'mean±sd' (sd shown as — for a single value); ``n_of=(k, n)`` appends ' (k/n)' if k < n."""
+    m, s = ms
+    text = f"{m:{'+' if signed else ''}{fmt}}±" + ("—" if math.isnan(s) else f"{s:{fmt}}")
+    return text if n_of is None or n_of[0] == n_of[1] else f"{text} ({n_of[0]}/{n_of[1]})"
 
 
 def _isnan(x: Any) -> bool:
@@ -46,12 +54,19 @@ def is_diverged(r: dict[str, Any]) -> bool:
     a NaN test AUC, which the harness produced from non-finite logits."""
     tm = r.get("test_metrics", {})
     return bool(r.get("diverged") or tm.get("diverged")
-                or _isnan(tm.get("test_auc")) or _isnan(r.get("ood_auc")))
+                or _isnan(tm.get("test_auc")) or any(_isnan(r.get(k)) for k in ("id_auc", "ood_auc", "auc_gap")))
 
 
 def load_results(results_dir: pathlib.Path) -> list[dict[str, Any]]:
-    return [json.loads(p.read_text(encoding="utf-8"))
-            for p in sorted(results_dir.glob("*.json"))]
+    """Every readable record in the directory; an unreadable file (e.g. truncated by a
+    killed run) is reported and skipped instead of aborting the whole aggregation."""
+    out = []
+    for p in sorted(results_dir.glob("*.json")):
+        try:
+            out.append(json.loads(p.read_text(encoding="utf-8")))
+        except (OSError, ValueError) as e:
+            print(f"warning: skipping {p.name}: {e}", file=sys.stderr)
+    return out
 
 
 def group_by_experiment_model(records: list[dict]) -> dict[tuple[str, str], list[dict]]:
@@ -185,19 +200,19 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
                 test_acc  = _mean_std([r["test_metrics"]["test_acc"]       for r in recs])
                 aucs = [r["test_metrics"]["test_auc"] for r in recs
                         if r["test_metrics"].get("test_auc") is not None]
-                test_auc = _mean_std(aucs) if (has_auc and aucs) else None
+                test_auc = (_mean_std(aucs), (len(aucs), len(recs))) if (has_auc and aucs) else None
                 # 1/eps_B is inf when a run separates the classes perfectly
                 # at eps_S=0.3; keep only finite values so one such seed does
                 # not turn the mean/std into inf/nan.
                 rej = [r["test_metrics"]["bg_rej_30"] for r in recs
                        if r["test_metrics"].get("bg_rej_30") is not None
                        and math.isfinite(r["test_metrics"]["bg_rej_30"])]
-                bg_rej = _mean_std(rej) if rej else None
+                bg_rej = (_mean_std(rej), (len(rej), len(recs))) if rej else None
                 rows.append((label, len(all_recs), n_params, val_acc, test_acc,
                              test_auc, bg_rej))
 
             if has_auc:
-                rows.sort(key=lambda r: -(r[5][0] if r[5] else -1))
+                rows.sort(key=lambda r: -(r[5][0][0] if r[5] else -1))
             else:
                 rows.sort(key=lambda r: -(r[4][0] if r[4] else -1))
 
@@ -212,12 +227,11 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
                     out_lines.append("| " + " | ".join(cells) + " |")
                     continue
                 cells = [model, str(n), p,
-                         f"{v[0]:.3f}±{v[1]:.3f}",
-                         f"{t[0]:.3f}±{t[1]:.3f}"]
+                         _pm(v), _pm(t)]
                 if has_auc:
-                    cells.append(f"{a[0]:.3f}±{a[1]:.3f}" if a else "—")
+                    cells.append(_pm(a[0], ".3f", a[1]) if a else "—")
                 if has_rej:
-                    cells.append(f"{rj[0]:.0f}±{rj[1]:.0f}" if rj else "—")
+                    cells.append(_pm(rj[0], ".0f", rj[1]) if rj else "—")
                 out_lines.append("| " + " | ".join(cells) + " |")
             out_lines.append("")
     return "\n".join(out_lines)
@@ -286,10 +300,8 @@ def _render_boost_ood_one(groups: dict[tuple[str, str], list[dict]], experiment:
         if i is None:
             lines.append(f"| {model} | {n} | {p} | — | diverged | — |")
             continue
-        lines.append(
-            f"| {model} | {n} | {p} | {i[0]:.3f}±{i[1]:.3f} | "
-            f"{o[0]:.3f}±{o[1]:.3f} | {g[0]:+.3f}±{g[1]:.3f} |"
-        )
+        lines.append(f"| {model} | {n} | {p} | {_pm(i)} | {_pm(o)} | "
+                     f"{_pm(g, signed=True)} |")
     return "\n".join(lines) + "\n"
 
 
@@ -309,7 +321,8 @@ def main(argv: list[str] | None = None) -> int:
 
     records = load_results(results_dir)
     if args.experiment:
-        records = [r for r in records if r["experiment"] == args.experiment]
+        records = [r for r in records
+                   if isinstance(r, dict) and r.get("experiment") == args.experiment]
     if not records:
         print("No matching result files.", file=sys.stderr)
         return 1

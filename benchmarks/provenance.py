@@ -18,7 +18,9 @@ silently overwrote each other.
 from __future__ import annotations
 
 import datetime
+import os
 import pathlib
+import re
 import platform
 import subprocess
 import sys
@@ -46,10 +48,25 @@ def _version(module: str) -> str | None:
     return getattr(mod, "__version__", None)
 
 
+def _owns_repository() -> bool:
+    """True if REPO_ROOT is the top level of a git work tree. Inside an unrelated enclosing
+    repository (vendored copy, installed package in a venv under a repo) git would report
+    that repository's commit, which says nothing about this code."""
+    top = _git("rev-parse", "--show-toplevel")
+    try:
+        return top is not None and os.path.samefile(top, REPO_ROOT)
+    except OSError:
+        return False
+
+
 def run_metadata(argv: list[str] | None = None) -> dict[str, Any]:
     """Code version, environment and command line of the current run."""
-    commit = _git("rev-parse", "HEAD")
-    status = _git("status", "--porcelain", "--untracked-files=no")
+    own = _owns_repository()
+    commit = _git("rev-parse", "HEAD") if own else None
+    # Result records under results/ are meant to be committed and rewritten by
+    # re-runs; they say nothing about the code, so they do not make it dirty.
+    status = (_git("status", "--porcelain", "--untracked-files=no", "--", ".",
+                   ":(exclude)results") if own else None)
     return {
         "git_commit": commit,
         "git_dirty": None if status is None else bool(status),
@@ -65,6 +82,17 @@ def run_metadata(argv: list[str] | None = None) -> dict[str, Any]:
     }
 
 
+def write_json_atomic(path: pathlib.Path | str, obj: Any) -> None:
+    """Write a result record via a temporary file and os.replace, so a killed
+    run never leaves a truncated JSON that aggregate would choke on."""
+    import json
+    import os
+    path = pathlib.Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def experiment_tag(base: str, options: dict[str, Any],
                    defaults: dict[str, Any]) -> str:
     """``base`` plus ``-key_value`` for every option that differs from its default.
@@ -78,7 +106,8 @@ def experiment_tag(base: str, options: dict[str, Any],
     for key, value in options.items():
         if value == defaults.get(key):
             continue
-        text = str(value).replace("__", "_").replace("/", "_").replace(" ", "")
+        text = re.sub(r"[^A-Za-z0-9._+-]", "_", str(value).replace(" ", ""))
+        text = re.sub(r"_+", "_", text).strip("_")      # no "__": it separates the file-name fields
         parts.append(f"{key}_{text}")
     return "-".join(parts)
 
@@ -91,10 +120,12 @@ def parse_seeds(text: str | None, default: int = 0) -> list[int]:
     for part in str(text).split(","):
         part = part.strip()
         if "-" in part:
-            lo, hi = part.split("-", 1)
-            seeds.extend(range(int(lo), int(hi) + 1))
+            lo, hi = (int(t) for t in part.split("-", 1))
+            if hi < lo:
+                raise ValueError(f"empty seed range {part!r} in {text!r}")
+            seeds.extend(range(lo, hi + 1))
         elif part:
             seeds.append(int(part))
     if not seeds:
         raise ValueError(f"no seeds in {text!r}")
-    return seeds
+    return list(dict.fromkeys(seeds))       # a seed listed twice is trained once

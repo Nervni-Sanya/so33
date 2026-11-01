@@ -28,7 +28,6 @@ which only differ in their dataset loader.
 
 from __future__ import annotations
 
-import json
 import pathlib
 import warnings
 from dataclasses import asdict
@@ -43,7 +42,7 @@ from .models import (
     build_model, max_constituent_norm, model_family, is_set_model,
     MATCHED_MODELS, NATURAL_MODELS, SET_MODELS,
 )
-from .provenance import run_metadata
+from .provenance import run_metadata, write_json_atomic
 from .train import train_classifier, TrainConfig, predict_logits, so33_activations
 
 
@@ -299,14 +298,17 @@ def run_tabular_experiment(
             if eq is not None:
                 record["equivariance"] = eq
         out_path = out_dir / f"{experiment}__{name}__seed{seed}.json"
-        out_path.write_text(json.dumps(record, indent=2))
-        if save_scores and scores is not None:
+        write_json_atomic(out_path, record)
+        scores_path = out_dir / f"{experiment}__{name}__seed{seed}__scores.npz"
+        if save_scores and scores is not None and not diverged:
             import numpy as np
             np.savez_compressed(
-                out_dir / f"{experiment}__{name}__seed{seed}__scores.npz",
+                scores_path,
                 scores=scores.astype(np.float32),
                 labels=split.y_test.cpu().numpy().astype(np.int8),
             )
+        elif scores_path.exists():
+            scores_path.unlink()        # stale scores of an earlier run of this record
 
         line = {
             "model":     name,

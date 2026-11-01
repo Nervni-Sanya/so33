@@ -117,7 +117,8 @@ def render(rows: list[dict], experiment: str, baseline: str, metric: str) -> str
         if r["n"] == 0:
             lines.append(f"| {name} | 0 | — | — | — | — | — |")
             continue
-        diff = (f"{r['diff_mean']:+.4f} [{f(r['diff_ci_low'], '+.4f')}, {f(r['diff_ci_high'], '+.4f')}]"
+        diff = (f"{r['diff_mean']:+.4f} [{f(r['diff_ci_low'], '+.4f')}, "
+                f"{f(r['diff_ci_high'], '+.4f')}] (n={r['paired_n']})"
                 if "diff_mean" in r else "—")
         lines.append(
             f"| {name} | {r['n']} | {f(r['mean'])} ± {f(r['sd'])} | "
@@ -144,7 +145,15 @@ def main(argv: list[str] | None = None) -> int:
     models = [m.strip() for m in args.models.split(",")] if args.models else None
     if models is not None and args.baseline not in models:
         models = [args.baseline] + models
-    rows = compare(records, args.experiment, args.baseline, args.metric, models)
+    try:
+        rows = compare(records, args.experiment, args.baseline, args.metric, models)
+    except ValueError as e:
+        known = sorted({r.get("model") for r in records
+                        if isinstance(r, dict) and r.get("experiment") == args.experiment
+                        and r.get("model")})
+        print(f"error: {e}; models in {args.experiment!r}: {', '.join(known) or 'none'}",
+              file=sys.stderr)
+        return 2
     out = render(rows, args.experiment, args.baseline, args.metric)
     print(out)
     if args.out:

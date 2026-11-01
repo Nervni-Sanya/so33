@@ -36,7 +36,6 @@ Run:
 from __future__ import annotations
 
 import argparse
-import json
 import pathlib
 import sys
 
@@ -47,7 +46,7 @@ from benchmarks.equivariance import model_equivariance
 from benchmarks.models import (
     build_model, is_set_model, max_constituent_norm, _lift_4to6,
 )
-from benchmarks.provenance import experiment_tag, parse_seeds, run_metadata
+from benchmarks.provenance import experiment_tag, parse_seeds, run_metadata, write_json_atomic
 from benchmarks.synthetic import generate_boost_invariant_dataset
 from benchmarks.tabular_runner import connection_cap_kwargs, so33_summary
 from benchmarks.train import train_classifier, TrainConfig, predict_logits
@@ -218,8 +217,7 @@ def run_seed(args, seed: int, names: list[str], experiment: str,
                                                   n_groups=args.probe_groups,
                                                   rapidity=args.probe_rapidity),
                     }
-        (results_dir / f"{experiment}__{name}__seed{seed}.json").write_text(
-            json.dumps(record, indent=2))
+        write_json_atomic(results_dir / f"{experiment}__{name}__seed{seed}.json", record)
         if args.save_samples:
             arrays = {"labels": y_all.astype(np.int8),
                       "rapidity": r_all.astype(np.float32),
