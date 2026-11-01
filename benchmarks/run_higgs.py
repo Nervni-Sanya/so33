@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--cache-dir",   type=str, default="data",
                    help="Directory containing HIGGS.csv.gz.")
     p.add_argument("--max-samples", type=int, default=200_000,
-                   help="Sub-sample HIGGS to this many rows (default 200k of 11M).")
+                   help="Use the first N rows of HIGGS (default 200k of 11M).")
     p.add_argument("--seed",        type=int, default=0)
     p.add_argument("--seeds",       type=str, default=None,
                    help="Seeds to run in one process, e.g. '0-7'. Overrides --seed.")

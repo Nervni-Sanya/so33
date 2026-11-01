@@ -43,7 +43,8 @@ labels (int8). n_params is 0 for the two cuts and null for the BDT, whose size
 (trees x leaves) is in ``model_size``. A non-default mass centre or BDT setting is
 appended to the model name. The observables cost ~0.1 ms per jet on one core
 (~3.5 min for the 2.0M canonical jets); ``--cache-observables`` keeps them,
-keyed to a sha256 of the jets, for later runs (other BDT seeds or settings).
+keyed to a sha256 of the jets and of ``jet_observables.py``, for later runs
+(other BDT seeds or settings).
 
 Run:
     # Canonical protocol, observables cached for the next seeds:
@@ -281,8 +282,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--mass-centre", type=float, default=TOP_MASS,
                    help="Centre of the mass window -|M_jet - centre| in GeV.")
     p.add_argument("--cache-observables", type=str, default=None, metavar="PATH.npz",
-                   help="Load the jet observables from this file if it holds them "
-                        "for the same jets, else compute and save them there.")
+                   help="Load the jet observables from this file if it exists (a "
+                        "file made for other jets or by other code raises an "
+                        "error: delete it), else compute and save them there.")
     p.add_argument("--chunk-jets", type=int, default=CHUNK_JETS,
                    help="Jets per clustering block (memory bound; at most "
                         "2^21 / K^2 jets are used per block).")

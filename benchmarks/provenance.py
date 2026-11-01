@@ -4,9 +4,10 @@ benchmarks.provenance
 Run metadata stored in every result JSON, and result-file naming.
 
 ``run_metadata`` records the exact code version (git commit and whether
-the working tree had uncommitted changes), library versions, platform,
-command line and UTC time, so every number in a table can be traced to
-the commit that produced it.
+tracked files had uncommitted changes; untracked files and everything
+under ``results/`` are not counted), library versions, platform, command
+line and UTC time, so every number in a table can be traced to the commit
+that produced it.
 
 ``experiment_tag`` appends every non-default protocol option to an
 experiment name. Result files are named

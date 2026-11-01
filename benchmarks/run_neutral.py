@@ -9,9 +9,10 @@ better nor worse. A large win OR a collapse would both be flags
 worth investigating before reporting headline numbers.
 
 Controls for the parameter-efficiency comparison: ``tanh_mlp_w24`` is a
-width-24 tanh MLP with the same parameter count as ``so33_multi``
-(2,594 vs 2,654), and ``--weight-decay`` / ``--early-stop-patience``
-regularise the width-256 MLPs, which otherwise overfit.
+width-24 tanh MLP with about the same parameter count as ``so33_multi``
+(2,594 vs 2,654 on the 105 one-hot Adult features), and
+``--weight-decay`` / ``--early-stop-patience`` regularise the width-256
+MLPs, which otherwise overfit.
 
 Run:
     python -m benchmarks.run_neutral --quick

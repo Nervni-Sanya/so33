@@ -17,8 +17,9 @@ Two quantities are measured at each (||c||, bound) cell
 The flow conserves <v, v>_eta for every connection, so in exact arithmetic
 eps_m only tests whether the input bound is invariant and is blind to the
 connection; its residual growth with ||c|| for bounds none / eta is the
-RK4 conservation error (step 0.03; it falls as h^4 when the step is
-halved). eps_sigma measures equivariance of the activation itself, and is
+RK4 conservation error (step 0.03; at ||c|| <= 0.1 it falls ~15x, i.e. as
+h^4, when the step is halved; larger ||c|| is not yet asymptotic).
+eps_sigma measures equivariance of the activation itself, and is
 non-zero for every c != 0 whatever the bound. The figure shows both.
 Cells whose flow overflowed (non-finite or > 1e3) are drawn as crosses
 on the top edge instead of being dropped.

@@ -12,9 +12,9 @@ is a structured nonlinear flow that conserves the indefinite (Lorentz-like) norm
 ⟨v,v⟩_η, and it can be assembled into architectures whose readout is SO(3,3)
 invariant.
 
-This repository contains the activation, two end-to-end architectures built on it,
-a benchmark harness, and the source of an accompanying preprint
-(see [`paper/`](paper/)).
+This repository contains the activation, two end-to-end architectures (A: SO(3,3)
+invariants only, no ODE; B: built on the activation), a benchmark harness, and the
+source of an accompanying preprint (see [`paper/`](paper/)).
 
 ## What's here
 
@@ -66,7 +66,7 @@ are fixed in the code; the affected experiments have to be re-run.
 | **Boost-OOD sanity check** | Synthetic single particles (K=1), train rapidity ≤0.6, test ≤2.5 | `eta_invariants` reaches OOD AUC 1.000 by construction (it reads m² directly); a relu MLP degrades to 0.944 ± 0.004. |
 | **Non-invariant input bound** | Same task, architecture B | With the Euclidean bound ÷(1+‖x‖₂) the readout ⟨β(x),β(x)⟩_η depends on rapidity and OOD AUC falls to 0.663 ± 0.001; the η rescaling — or no bound — gives 1.000. With K=1 the connection gets no gradient (c → 0), so this tests the input map, not the flow. |
 | **Top tagging, canonical protocol** | Full 404k test set, 32 leading constituents | `eta_invariants` (4.8k params) AUC 0.948, 1/ε_B ≈ 50; a zero-parameter mass window gives 0.941 / 40. Baselines under the identical protocol: jet mass / mass window / BDT on (M, τ₃₂), linear EFPs, PFN/EFN and LorentzNet at ~5k parameters. |
-| **Tabular data** | HIGGS, Adult at width 6 | The activations are statistically indistinguishable on HIGGS at n = 3 (Welch p ≈ 0.27); on Adult the small width-6 models already beat the unregularised width-256 MLPs, so `so33_multi` (0.912) is not evidence of an inductive bias. |
+| **Tabular data** | HIGGS, Adult at width 6 | `so33` and `relu_bottleneck` are statistically indistinguishable on HIGGS at n = 3 (Welch p ≈ 0.27; `tanh_bottleneck` is ahead of both at 0.770 AUC and the frozen connection is behind at 0.737); on Adult the small width-6 models already beat the unregularised width-256 MLPs, so `so33_multi` (0.912) is not evidence of an inductive bias. |
 
 > ⚠️ **No SOTA claim.** Dedicated Lorentz-equivariant taggers (LorentzNet, PELICAN)
 > reach AUC ≈ 0.987 with background rejections in the thousands on the same test set.
@@ -80,8 +80,10 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-To run the benchmarks, add the extras (`scikit-learn` and `scipy` are needed for AUC,
-background rejection and statistics; the rest is for the top-tagging download):
+To run the benchmarks, add the extras (`scikit-learn` and `scipy`: AUC, background
+rejection and statistics; `matplotlib`: the figure scripts; `pandas`: the Adult loader,
+without which `run_neutral` falls back to the breast-cancer data, and the top-tagging
+conversion; `huggingface_hub`, `pyarrow`, `tables`: the top-tagging download):
 
 ```bash
 pip install -e ".[bench]"
@@ -125,6 +127,7 @@ torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
 | `max_input_norm` | `float \| None` | `None` | Soft norm cap (rescales only outliers); used on the flat tabular paths. |
 | `rtol` / `atol` | `float` | `1e-4` / `1e-5` | Adaptive-solver tolerances. |
 | `reg_coef` | `float` | `1e-3` | Frobenius penalty on the raw connection (add `regularization_loss()` to the loss). |
+| `dtype` / `solver_options` | `torch.dtype` / `dict \| None` | `float64` / `None` | Parameter and basis dtype; extra torchdiffeq `options` (e.g. `step_size`). |
 
 **Stability.** Rotations preserve ‖v‖₂; boosts give d‖v‖/dt ≤ 4/(3√6)·‖ω_eff‖_F·‖v‖²
 (sharp), so the flow can blow up before T once that factor times ‖x‖·T reaches 1.
@@ -139,7 +142,10 @@ equivariance.
   total's η-norm) into a 7–64–64–2 ReLU MLP (4,802 parameters). No ODE.
 - **`so33_equivariant`** (Arch B) — same lift, four SO33 activation channels per
   particle, then per channel the mean η-norm, mean |η-norm| and the jet total's
-  η-norm (= −M²_jet at c = 0) into a 12–32–2 head (542 parameters). Variants:
+  η-norm into a 12–32–2 head (542 parameters). At c = 0 the last feature is −M²_jet
+  for `_unbounded`, and approximately so for `_eta_bounded` (its rescaling
+  1/(1+√|m²ᵢ|) is ≈ 1 on nearly massless constituents); the default variant, with the
+  Euclidean bound, sees the η-norm of Σᵢ xᵢ/(1+‖xᵢ‖₂) instead. Variants:
   `_unbounded`, `_eta_bounded`, `_frozen`. With `--connection-cap auto` (default) the
   runners give the β_none/β_η channels the provable cap for the largest training
   constituent; the β_euc channels see ‖x‖ < 1 and get min(1, 0.92/T) = 1 at T = 0.3.
@@ -150,19 +156,21 @@ equivariance.
   official lab-frame beams; deviations listed in `benchmarks/lorentznet.py`; its
   BatchNorm statistics are re-estimated before every validation pass);
   `benchmarks/run_jet_baselines.py` (jet mass, mass window −|M−172.5 GeV|, BDT on
-  (M, τ₃₂) with exclusive-kT axes *without* minimisation — τ₂, τ₃ ~30% larger than
-  with the one-pass-minimised axes of LHC analyses, so a conservative τ₃₂ baseline);
+  (M, τ₃₂) with exclusive-kT axes *without* minimisation — τ₂, τ₃ are no smaller than
+  with the one-pass-minimised axes of LHC analyses (by how much is not measured here),
+  so a conservative τ₃₂ baseline);
   `benchmarks/run_efp_baseline.py` (linear Fisher
   discriminant on energy flow polynomials, d ≤ 5 by default). The jet-observable /
   EFP rows report accuracy at a cut tuned on val, the networks the argmax of their
   logits: compare AUC and 1/ε_B across the two kinds of rows, not accuracy.
 - **`so33`, `so33_multi`, `so33_signature_only`, `so33_frozen`** — Deep Sets / bottleneck
   variants used in the tabular comparisons; `<relu|tanh|gelu>_mlp_w<H>` are MLPs of
-  width H (e.g. `tanh_mlp_w24`, the Adult control at the `so33_multi` parameter count).
+  width H (e.g. `tanh_mlp_w24`, the Adult control with about the `so33_multi` parameter
+  count: 2,594 vs 2,654).
 
 ## Reproducing the experiments
 
-All commands run from the repo root and write one JSON per (model, seed) to
+All commands run from the repo root; the runners write one JSON per (model, seed) to
 `results/`, including the git commit, library versions and command line, the
 training-guard outcome (`diverged`) and, for SO33 models, the trained coefficients.
 Commit these JSONs with the code that produced them; per-sample `.npz` files
@@ -180,12 +188,17 @@ python -m benchmarks.figure_equivariance
 
 # Top tagging on the canonical Kasieczka split. Download first (~2M jets):
 #   python -m benchmarks.download_top_tagging --cache-dir data
-# Architecture B: check stability first (2 minutes), then train.
+python -m benchmarks.run_top_tagging --representation constituents --canonical-splits \
+    --models eta_invariants,pfn,efn --seeds 0-2 --save-scores
+python -m benchmarks.run_jet_baselines --canonical-splits --save-scores
+# Architecture B: check stability first (a few minutes: 2 x 300 short training steps
+# plus loading the 400k-jet val and test files). On a CPU it costs ~1.5 days per seed
+# on all 1.2M train jets, so train it on 300k (its own table, with every model re-run
+# there by paper/runs/week1.sh; val and test stay complete):
 python -m benchmarks.diagnose_archb_stability --cache-dir data --canonical-splits \
     --max-train-samples 50000
 python -m benchmarks.run_top_tagging --representation constituents --canonical-splits \
-    --models eta_invariants,so33_equivariant_eta_bounded,pfn,efn --seeds 0-2 --save-scores
-python -m benchmarks.run_jet_baselines --canonical-splits --save-scores
+    --models so33_equivariant_eta_bounded --seeds 0-2 --save-scores --max-train-samples 300000
 
 # HIGGS with 8 seeds and paired statistics
 python -m benchmarks.run_higgs --seeds 0-7

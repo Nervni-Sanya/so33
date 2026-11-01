@@ -13,7 +13,7 @@ read in raw GeV (``normalize="none"``; the EFPs are invariant under a global
 rescaling anyway). The real constituents (mask > 0) of each jet are converted
 to hadronic coordinates (pT, y, phi) and every EFP with 1 <= d <= ``--dmax``
 is computed with the ``energyflow`` package (``EFPSet.batch_compute``) in the
-paper's hadronic measure (its Eq. 2.4, energyflow ``measure="hadr"``):
+hadronic measure (energyflow ``measure="hadr"``):
 
     EFP_G = sum_{i_1..i_N} z_{i_1} ... z_{i_N} prod_{(k,l) in G} theta_{i_k i_l},
     z_i = pT_i / sum_j pT_j,    theta_ij = (Delta y_ij^2 + Delta phi_ij^2)^(beta/2),
@@ -21,12 +21,12 @@ paper's hadronic measure (its Eq. 2.4, energyflow ``measure="hadr"``):
 with the sums over all ordered N-tuples of constituents and Delta phi wrapped
 into [0, pi]. The d = 0 EFP is identically 1 with normalised z and would only
 duplicate the intercept, so it is left out. The model then has n_EFP + 1
-parameters: 13 / 102 / 1000 for d <= 3 / 5 / 7, which are the EFP counts the
-paper quotes (they include d = 0).
+parameters: 13 / 102 / 1000 for d <= 3 / 5 / 7, i.e. the number of EFPs
+including d = 0 (energyflow's EFPSet has 12 / 101 / 999 with d >= 1).
 
 The EFPs are standardised with train statistics and a Fisher linear
 discriminant (scikit-learn ``LinearDiscriminantAnalysis``, as energyflow's
-LinearClassifier for the paper) is fitted on train. Its decision function is
+LinearClassifier does) is fitted on train. Its decision function is
 the jet score (test AUC, 1/eps_B at eps_S = 0.3 / 0.5); the accuracy
 threshold is the one that maximises val accuracy, so this row's
 final_val_acc / test_acc use a val-tuned cut while the networks' accuracy is
@@ -37,20 +37,22 @@ shrinkage. The EFP basis is extremely collinear (the standardised
 within-class correlation of the d <= 5 EFPs has condition number ~5e13), and
 the discriminating information sits in the near-degenerate directions:
 Ledoit-Wolf shrinkage (``--lda-solver lsqr --lda-shrinkage auto``) lowered
-the toy test AUC from 0.995 to 0.982. The svd fit needs ~6 copies of the
-(n_train, n_EFP) matrix (d <= 5 on the full canonical train: ~8-9 GB peak).
+the toy test AUC (0.995 -> 0.988 with ``--toy-jets 20000``, d <= 5, seed 0).
+The svd fit needs ~6 copies of the (n_train, n_EFP) matrix (d <= 5 on the
+full canonical train: ~8-9 GB peak).
 For d = 7 on a large train set use ``--lda-solver lsqr`` (~1.2 copies;
 without shrinkage it is the same pseudo-inverse as svd with tol 1e-12).
 walltime_sec counts the EFP computation only when it was not loaded from
 ``--cache-efps``; with ``--n-jobs`` it is wall-clock time.
 
-Departures from the paper: d <= 5 by default (the paper uses d <= 7; the EFPs
-of one jet cost ~5 ms per core at d <= 5 and ~90 ms at d <= 7, i.e. ~3 and
-~50 core-hours for the 2.0M canonical jets, hence ``--n-jobs`` and
+Departures from the paper's linear-classification setup: d <= 5 by default
+(the paper uses d <= 7, the 1000 EFPs counted above; the EFPs of one jet
+cost ~5 ms per core at d <= 5 and ~90 ms at d <= 7, i.e. ~3 and ~50
+core-hours for the 2.0M canonical jets, hence ``--n-jobs`` and
 ``--cache-efps``); only the leading-K constituents enter (the paper uses all
 particles of the jet); the data are the Kasieczka jets (pT 550-650 GeV,
-|eta| < 2, R = 0.8), not the paper's Pythia samples. beta = 0.5 is the paper's
-choice for top tagging.
+|eta| < 2, R = 0.8), not the paper's Pythia samples. The angular exponent is
+beta = 0.5 by default (``--beta``).
 
 Writes ``<experiment>__efp_linear_d<dmax>__seed<N>.json`` (family
 ``jet_observable``; the experiment name is the one ``run_top_tagging`` gives
@@ -97,7 +99,7 @@ MEASURE = "hadr"           # z_i = pT_i / sum pT, theta_ij = Delta R_ij^beta
 KAPPA = 1                  # energy weighting; only kappa = 1 is IRC safe
 COORDS = "ptyphim"         # energyflow input rows (pT, y, phi)
 DEFAULT_DMAX = 5
-DEFAULT_BETA = 0.5         # the paper's choice for top tagging (its Fig. 10)
+DEFAULT_BETA = 0.5         # angular exponent of theta_ij (--beta)
 DEFAULT_SOLVER = "svd"
 LDA_TOL = 1e-12            # svd rank threshold, as energyflow's LinearClassifier (scikit-learn: 1e-4)
 CHUNK_JETS = 10_000        # jets per batch_compute call (bounds memory)
@@ -472,9 +474,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--n-jobs", type=int, default=1,
                    help="Processes for energyflow's batch_compute (1: no pool).")
     p.add_argument("--cache-efps", type=str, default=None, metavar="PATH.npz",
-                   help="Load the EFPs from this file if it holds them for the "
-                        "same data and measure (any dmax >= --dmax), else "
-                        "compute and save them there.")
+                   help="Load the EFPs from this file if it exists (any dmax >= "
+                        "--dmax; a file made for other data or a smaller dmax "
+                        "raises an error: delete it), else compute and save "
+                        "them there.")
     args = p.parse_args(argv)
 
     if not 1 <= args.dmax <= 10:

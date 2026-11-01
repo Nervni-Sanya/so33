@@ -12,10 +12,11 @@ Two representations:
   and the invariant / equivariant Architectures A and B. ``--canonical-splits``
   uses the published Kasieczka train / val / test files.
 
-Reports matched-bottleneck, natural-width and equivariant-set tables. Note:
-with only 6 features the natural-width MLP also has ~6 -> 256 -> 2 = much
-larger param count than matched, but this matches the "engineering"
-interpretation (let baselines use what dimensionality they want).
+Reports matched-bottleneck, natural-width, equivariant-set and
+published-baseline tables. Note: with only 6 features the natural-width MLP
+also has ~6 -> 256 -> 2 = much larger param count than matched, but this
+matches the "engineering" interpretation (let baselines use what
+dimensionality they want).
 
 Result files are ``<experiment>__<model>__seed<N>.json``. Any non-default
 protocol option (normalisation, pooling, K, sample caps, epochs, connection
@@ -70,7 +71,11 @@ def main(argv: list[str] | None = None) -> int:
                    help="Smoke run: 6-D Gaussian stand-in (1k samples, 5 epochs).")
     p.add_argument("--cache-dir",   type=str, default="data",
                    help="Directory containing top_tagging_*.npz.")
-    p.add_argument("--max-samples", type=int, default=100_000)
+    p.add_argument("--max-samples", type=int, default=100_000,
+                   help="Jets read for the internal 70/15/15 split (not used with "
+                        "--canonical-splits): the first N jets of the sorted "
+                        "files, i.e. of top_tagging_test.npz when all three "
+                        "files are present.")
     p.add_argument("--seed",        type=int, default=0)
     p.add_argument("--seeds",       type=str, default=None,
                    help="Seeds to run in one process, e.g. '0-2' or '0,3'. "
@@ -88,17 +93,19 @@ def main(argv: list[str] | None = None) -> int:
                    help="Leading constituents per jet (constituents mode only).")
     p.add_argument("--normalize", choices=["global", "per_component", "none"],
                    default="global",
-                   help="Constituent normalisation. 'global' (default) preserves "
-                        "the Lorentz invariant E^2-p^2 (best for SO33); "
-                        "'per_component' z-scores each component (destroys it).")
+                   help="Constituent normalisation. 'global' (default) divides all "
+                        "components by one scalar, so E^2-p^2 survives up to a "
+                        "global factor (the SO33 lift needs it); 'per_component' z-scores "
+                        "each component (destroys it).")
     p.add_argument("--pool", choices=["mean", "sum"], default="mean",
                    help="Deep Sets pooling over constituents.")
     p.add_argument("--canonical-splits", action="store_true",
                    help="Use the published Kasieczka train/val/test split "
                         "(reads top_tagging_{train,val,test}.npz separately) "
-                        "instead of a random 70/15/15 re-split. Makes the "
-                        "test AUC directly comparable to published numbers. "
-                        "constituents mode only.")
+                        "instead of a random 70/15/15 re-split: the same test "
+                        "jets as published taggers (e.g. the official LorentzNet "
+                        "uses all constituents, here only the leading "
+                        "--n-constituents). constituents mode only.")
     p.add_argument("--max-train-samples", type=int, default=None,
                    help="Cap the number of canonical-train jets (memory/time); "
                         "test is always loaded in full, and val too (or, if the "

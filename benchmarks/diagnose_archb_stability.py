@@ -25,7 +25,9 @@ The script
      coefficient norm at which the legacy cap stops being provably safe;
   3. trains the chosen Architecture-B variant for ``--steps`` steps with
      the connection cap off (legacy) and auto, logging the worst-case
-     growth parameter q(t) = alpha(t) * r_max * T and the first
+     growth parameter q(t) = alpha(t) * r * T (r: the largest norm the
+     activations see, i.e. r_max, or 1 for the Euclidean-bound variants
+     ``so33_equivariant`` / ``so33_equivariant_frozen``) and the first
      non-finite loss or gradient.
 
 Run:

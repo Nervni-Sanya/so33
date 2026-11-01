@@ -133,10 +133,11 @@ def render_dataeff(groups: dict[tuple[str, str], list[dict]]) -> str:
 def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
     """Render real-data tabular experiments (HIGGS / Top Tagging / Neutral).
 
-    Splits each experiment into matched-bottleneck, natural-width and
-    equivariant/invariant-set sub-tables based on the per-record
-    ``family`` field. Reports val_acc, test_acc, AUC and background
-    rejection 1/eps_B at eps_S=0.3 (when present).
+    Splits each experiment into matched-bottleneck, natural-width,
+    equivariant/invariant-set, published-tagger baseline and jet-observable
+    (cut / BDT / EFP) sub-tables based on the per-record ``family`` field.
+    Reports val_acc, test_acc, AUC and background rejection 1/eps_B at
+    eps_S=0.3 (when present).
     """
     tabular_experiments: dict[str, list[dict]] = defaultdict(list)
     for (exp, _model), recs in groups.items():

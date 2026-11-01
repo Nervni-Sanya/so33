@@ -56,7 +56,7 @@ SO(3,3)-equivariant input map, so the cap is the stabiliser of choice for
 unbounded (e.g. lifted four-momentum) inputs.
 
 Mitigations applied:
-  1. Small init:   coeffs ~ N(0, 0.01)  →  omega ≈ 0  at start
+  1. Small init:   coeffs ~ N(0, 0.01²) (std 0.01)  →  omega ≈ 0  at start
   2. Norm cap:     omega_eff = kappa * omega / (kappa + ||omega||_F)  (differentiable)
   3. Frobenius regularisation:  L_reg = reg_coef * ||omega||_F^2  (add to loss)
   4. Gradient clipping recommended in outer training loop (max_norm = 1.0)

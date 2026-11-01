@@ -3,15 +3,20 @@ benchmarks.models
 -----------------
 Model factory used by the benchmark harness.
 
-Two families:
+Four families (``model_family``):
 - Matched-bottleneck (Linear -> hidden=6 -> activation -> Linear).
   Every model in this family sees the same compression before the
   activation runs, so accuracy comparisons isolate the effect of the
   activation itself. Used for the "scientific" comparison.
 - Natural-width MLP (Linear(in -> H) -> activation -> Linear(H -> out)).
-  Standard 256-256 baseline that does NOT bottleneck through 6.
+  A single hidden layer of width H = 256 by default (not a 256-256 stack:
+  7,938 parameters on 28 inputs) that does NOT bottleneck through 6.
   Used for the "engineering" comparison: is SO33 competitive in
   practice given its hard 6-dim constraint?
+- Equivariant / invariant set models (Architectures A and B:
+  ``eta_invariants``, ``so33_equivariant*``), constituents representation only.
+- Published-tagger baselines (``pfn``, ``efn``, ``lorentznet``,
+  ``lorentznet_lab``; ~5k parameters), constituents representation only.
 
 The factory takes a string name + dimensions and returns an
 ``nn.Module``. SO33 variants automatically expose
@@ -106,7 +111,8 @@ ALL_MODELS = MATCHED_MODELS + NATURAL_MODELS + SET_MODELS + BASELINE_SET_MODELS
 SO33_MULTI_CHANNELS = 4
 
 # Natural-width MLPs at an explicit width, e.g. "tanh_mlp_w24" (Adult
-# control at the so33_multi parameter count: 105 -> 24 -> 2 = 2,594 params).
+# control at about the so33_multi parameter count: 105 -> 24 -> 2 = 2,594
+# params, vs 2,654 for so33_multi).
 _WIDTH_MLP = re.compile(r"^(relu|tanh|gelu)_mlp_w([1-9][0-9]*)$")
 _POINTWISE: dict[str, Callable[[], nn.Module]] = {
     "relu": nn.ReLU, "tanh": nn.Tanh, "gelu": nn.GELU,
@@ -196,7 +202,8 @@ class NaturalWidthMLP(nn.Module):
 class DeepSetsClassifier(nn.Module):
     """Per-particle phi -> masked mean pool -> rho head.
 
-    The headline Top Tagging architecture. Each jet arrives as a
+    The per-constituent Deep Sets skeleton of the matched-bottleneck and
+    natural-width rows on top tagging. Each jet arrives as a
     (B, K, 5) tensor where ``[..., :4]`` is the standardised
     (E, px, py, pz) of each of K constituents and ``[..., 4]`` is a
     mask (1.0 real, 0.0 padding). The same per-particle function phi =
@@ -647,7 +654,7 @@ def build_model(
 
     Parameters
     ----------
-    name        : one of ALL_MODELS.
+    name        : one of ALL_MODELS, or ``<relu|tanh|gelu>_mlp_w<width>``.
     in_features : input dimensionality. For ``representation="constituents"``
                   this is the per-particle feature count (4 = E,px,py,pz).
     out_features: number of classes (or regression outputs).

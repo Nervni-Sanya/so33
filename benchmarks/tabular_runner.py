@@ -5,7 +5,7 @@ Shared driver for tabular real-data experiments.
 
 Trains every model variant on a DatasetSplit, evaluates on the test
 split, and writes one JSON per (model, seed) into ``results_dir``.
-Reports up to three tables side-by-side:
+Reports up to four tables side-by-side:
 
 - ``matched_bottleneck``: every model uses Linear -> hidden=6 ->
   activation -> Linear. Apples-to-apples comparison; isolates whether
@@ -16,6 +16,8 @@ Reports up to three tables side-by-side:
   its hard 6-dim bottleneck.
 - ``equivariant_set``: the per-constituent invariant / equivariant models
   (Architectures A and B), constituents representation only.
+- ``baseline_set``: the published-tagger baselines (PFN, EFN, LorentzNet),
+  constituents representation only.
 
 Each JSON carries the run's provenance (git commit, versions, command
 line), the training-guard outcome (``diverged``), and, for models with SO33
@@ -79,11 +81,9 @@ def evaluate_test(
     """Return test accuracy, binary AUC, and background rejection.
 
     For binary tasks we also report background rejection ``1/eps_B`` at
-    signal efficiencies ``eps_S in {0.3, 0.5}``. Background rejection at
-    fixed signal efficiency is the field-standard headline metric for
-    jet tagging (LorentzNet, PELICAN, LGN all report ``1/eps_B`` at
-    ``eps_S = 0.3``), so reporting it makes our top-tagging numbers
-    directly comparable to the published literature. It is a no-op extra
+    signal efficiencies ``eps_S in {0.3, 0.5}``, the working points at which
+    published top taggers are usually quoted (``eps_S = 0.3`` in the
+    LorentzNet, PELICAN and LGN papers). It is a no-op extra
     for non-tagging tabular tasks (still cheap to compute).
 
     If any logit is non-finite the model has diverged: the result carries
@@ -192,8 +192,10 @@ def run_tabular_experiment(
 
     Returns
     -------
-    summary : list of {model, family, n_params, val_acc, test_acc, test_auc?, walltime}
-              records, one per (model, seed). Also printed as a table.
+    summary : list of {model, family, n_params, val_acc, test_acc, test_auc,
+              bg_rej_30, walltime, diverged} records, one per (model, seed)
+              (test_auc / bg_rej_30 are None when unavailable). Also printed
+              as tables.
     """
     out_dir = pathlib.Path(results_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

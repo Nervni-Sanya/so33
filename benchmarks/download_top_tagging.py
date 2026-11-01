@@ -187,9 +187,8 @@ def main(argv: list[str] | None = None) -> int:
                     break
             if local_path is None:
                 # Missing splits are non-fatal: the loader splits whatever
-                # it finds into train/val/test, and some mirrors (e.g.
-                # dl4phys/top_tagging) only ship a subset of the canonical
-                # files. Warn and move on.
+                # it finds into train/val/test, and some mirrors only ship a
+                # subset of the canonical files. Warn and move on.
                 print(f"[skip] {split}: none of {candidates} found in {source}",
                       file=sys.stderr)
                 continue

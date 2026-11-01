@@ -1,5 +1,11 @@
 # Week-2 task: diagnose why `so33_equivariant` loses OOD generalization
 
+> **Status.** This is the plan written before the measurements; the outcome is in
+> `diagnosis_findings.md` (the predicted OOD/ID error ratio >> 1 was wrong: 0.94). The
+> statement below that the non-equivariance "comes from one place" holds for the
+> K = 1 task, where c collapses to ~0; in general the learned connection itself breaks
+> equivariance at O(||c||) (README, "Corrections").
+
 Multi-seed (3) shows the failure is rock-solid reproducible:
 OOD AUC = 0.663 +/- 0.001, while `eta_invariants` (same lift, no
 SO33Activation) reaches 1.000 +/- 0.000. So the failure must come from
@@ -8,7 +14,7 @@ the activation or its wrapper, not from initialisation noise.
 ## Corrected hypothesis (after re-reading the code)
 
 `SO33Activation` does **not** have a learnable Γ-network -- the connection
-is parameterised by 15 fixed coefficients, with no input dependence. So
+is parameterised by 15 trainable, input-independent coefficients. So
 "Γ drift on covariant features" was the wrong story.
 
 The actual non-equivariance comes from one place: the `bound_input=True`

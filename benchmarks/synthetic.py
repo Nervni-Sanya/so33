@@ -73,7 +73,8 @@ def generate_causal_dataset(
     Class 1 — Spatial rotation connection ω_{01} (same-signature, spacelike)
 
     Each sample's terminal state v(T) is the integrated geodesic from a
-    random initial v(0) ~ N(0, init_scale) under the class-specific ω.
+    random initial v(0) ~ N(0, init_scale²) (std init_scale) under the
+    class-specific ω.
 
     Returns
     -------
@@ -151,11 +152,13 @@ def generate_boost_invariant_dataset(
     (px, py, pz, E, 0, 0): spatial momentum on the +axes 0..2, energy on
     the -axis 3 (matching the metric used elsewhere). The class label is
     the invariant mass band (low vs high), which is **boost-invariant** —
-    but every sample is hit with a random SO(3,3) boost of rapidity drawn
-    from ``rapidity_range``, so the raw components of the two classes
-    overlap heavily. Only a model that can recover the invariant separates
-    them cleanly, and a Lorentz-equivariant model should generalise across
-    rapidity regimes it never saw in training (the OOD claim).
+    but every sample is hit with a boost of rapidity drawn from
+    ``rapidity_range`` along a random one of the three spatial axes (a boost
+    in the (axis, 3) plane: 3 of the 9 non-compact so(3,3) generators), so
+    the raw components of the two classes overlap heavily. Only a model that
+    can recover the invariant separates them cleanly, and a
+    Lorentz-equivariant model should generalise across rapidity regimes it
+    never saw in training (the OOD claim).
 
     Returns
     -------

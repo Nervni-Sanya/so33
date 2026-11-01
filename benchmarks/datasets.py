@@ -17,16 +17,18 @@ Datasets
   low-level (kinematic) and 7 high-level (derived) variables.
   URL: https://archive.ics.uci.edu/ml/machine-learning-databases/00280/HIGGS.csv.gz
 
-- Top Tagging Reference (arXiv:1902.09914 / Zenodo 2603256): ~1.2M
-  jets, each with up to 200 constituents (E, px, py, pz). Binary:
-  top-vs-QCD. We aggregate per-jet to a fixed 6-D feature vector
-  (total 4-momentum + leading-particle 4-momentum projected onto
-  selected axes) so SO33 can consume the 6-D rep directly while
-  natural-width MLPs see a richer per-particle representation.
+- Top Tagging Reference (arXiv:1902.09914 / Zenodo 2603256): ~2M jets
+  (published split: 1,211,000 train / 403,000 val / 404,000 test), each with
+  up to 200 constituents (E, px, py, pz). Binary: top-vs-QCD. The aggregated
+  representation reduces every jet to the fixed 6-D vector
+  (px, py, pz, E, m_jet, pT) of its summed constituents (see
+  ``aggregate_jet_to_6d``) so SO33 can consume the 6-D rep directly; the
+  per-constituent representation keeps the leading K constituents.
   URL: https://zenodo.org/record/2603256
 
-- Neutral tabular (UCI Adult): 48k samples, 14 features (mixed),
-  binary income classification. Used as the "no Lorentz structure"
+- Neutral tabular (UCI Adult): 48k samples, 14 raw features (mixed; 105
+  columns after the one-hot encoding of the categoricals), binary income
+  classification. Used as the "no Lorentz structure"
   sanity check. Loaded via sklearn.datasets.fetch_openml when
   available; falls back to load_breast_cancer (569 samples) if
   network access is unavailable.
@@ -245,7 +247,9 @@ def _iter_top_tagging_jets(
 
     ``split`` selects the canonical Kasieczka split by filename. When
     ``None`` (default) *every* matching file is read and concatenated
-    (the historical behaviour, meant to be re-split randomly downstream).
+    (the historical behaviour, meant to be re-split randomly downstream) in
+    sorted file-name order (test, train, val), so with ``max_samples`` the
+    jets come from the *test* file first.
     When set to ``"train"``/``"val"``/``"test"``, only the file for that
     split is read: ``top_tagging_<split>.npz`` (or ``<split>.parquet`` /
     ``<split>.h5``), so the loader can honour the published split instead
@@ -456,9 +460,12 @@ def load_top_tagging_constituents(
 
     ``use_canonical_splits`` switches from the historical random 70/15/15
     re-split to the *published* Kasieczka train/val/test split, read from
-    the per-split files ``top_tagging_{train,val,test}.npz``. This is what
-    makes a test-set AUC directly comparable to published numbers
-    (LorentzNet, PELICAN, LGN). In that mode ``max_train_samples`` caps the
+    the per-split files ``top_tagging_{train,val,test}.npz``. This is the
+    split on which published taggers (LorentzNet, PELICAN, LGN) report: the
+    test jets are the same, but a test AUC here is not like-for-like with
+    theirs (e.g. the official LorentzNet uses all constituents, see
+    ``benchmarks/lorentznet.py``; here: the leading ``n_constituents``).
+    In that mode ``max_train_samples`` caps the
     training jets (memory/time), while val and test are loaded in full so
     the reported test metric is on the complete canonical test set. ``seed``
     only affects the internal split: if the canonical val file is missing,
@@ -475,8 +482,9 @@ def load_top_tagging_constituents(
             Xva, yva, mva = _stack_constituent_jets(
                 cache, None, n_constituents, split="val")
         except FileNotFoundError:
-            # Some mirrors (dl4phys/top_tagging) do not ship the validation
-            # file. Val is used for monitoring (and for --early-stop-patience
+            # Some mirrors do not ship the validation file (dl4phys/top_tagging
+            # names it validation.parquet, which download_top_tagging looks for).
+            # Val is used for monitoring (and for --early-stop-patience
             # when that is requested), so carving a 5% slice out of the
             # canonical train is legitimate and keeps the TEST set — the only
             # split that matters for comparability with published numbers —

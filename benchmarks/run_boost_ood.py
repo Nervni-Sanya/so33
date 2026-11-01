@@ -22,8 +22,8 @@ Reports, per model: in-distribution and out-of-distribution test AUC/acc,
 the gap, and the AUC in rapidity bins over the union of both test sets.
 For models with SO33 activations it records the trained coefficient
 norms, connection caps and (Architecture B) the equivariance errors
-eps_sigma / eps_m at the trained connection on ID and OOD inputs. With
-``--save-samples`` (default) it writes per-sample scores, labels,
+eps_sigma / eps_m at the trained connection on ID and OOD inputs. Unless
+``--no-save-samples`` is given it writes per-sample scores, labels,
 rapidities and Architecture-B readout features <h, h>_eta to
 ``<experiment>__<model>__seed<N>__samples.npz`` for
 ``benchmarks.figure_boost_ood``.

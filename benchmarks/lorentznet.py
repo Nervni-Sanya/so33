@@ -72,10 +72,11 @@ Sizes. Trainable parameters for L LGEBs of width H, 2 scalars, 2 classes:
     (L - 1)(7 H^2 + 14 H + 1) + 7 H^2 + 18 H + 3.
 Default H = 10, L = 6: 5,088 (this keeps the official depth of 6 LGEBs and
 scales the width 72 -> 10). The official top-tagging configuration H = 72,
-L = 6 gives 224,072 (the paper's "224k"). Initialisation as in the official
-code: PyTorch defaults, Xavier-uniform (gain 0.001) for the last phi_x layer;
-the modules are created in the official order (the last LGEB builds phi_x and
-deletes it), and parameter names match the official state dict.
+L = 6 gives 224,072 (the paper's "224k").
+Initialisation as in the official code: PyTorch defaults, Xavier-uniform (gain
+0.001) for the last phi_x layer; the modules are created in the official order
+(the last LGEB builds phi_x and deletes it), and parameter names match the
+official state dict.
 
 Departures from the reference:
   - width H = 10 instead of 72 (5,088 instead of 224,072 parameters); the

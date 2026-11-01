@@ -3,12 +3,15 @@ torchdiffeq>=0.2.0
 numpy>=1.21.0
 
 # Needed by the benchmarks: AUC / background rejection (benchmarks.tabular_runner)
-# and the Adult loader (fetch_openml). Without it test_auc / bg_rej_* are
-# left out of the results (with a RuntimeWarning). scipy: benchmarks.stats.
+# and the Adult loader (fetch_openml; the loader also needs pandas, see below,
+# else run_neutral falls back to breast-cancer data). Without it test_auc /
+# bg_rej_* are left out of the results (with a RuntimeWarning).
+# scipy: benchmarks.stats.
 scikit-learn>=1.0
 scipy>=1.7
 
-# Optional — for examples and Jupyter notebook
+# Optional — matplotlib: the example's loss curve and the benchmarks.figure_*
+# scripts; jupyter: no notebook is tracked in this repository.
 matplotlib>=3.5.0
 jupyter>=1.0.0
 

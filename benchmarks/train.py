@@ -4,18 +4,23 @@ benchmarks.train
 Reusable training loop and metrics for the SO33 benchmark harness.
 
 Single function ``train_classifier`` covers both the synthetic battery
-and the real-data experiments. It logs walltime and peak memory and
-returns a metrics dict that ``aggregate.py`` consumes.
+and the real-data experiments. It logs walltime and peak memory (CUDA only; 0
+on CPU) and returns a ``TrainResult`` whose fields end up in the result JSONs
+that ``aggregate.py`` consumes.
 
 Divergence guard: a step whose loss or gradient norm is non-finite is
 skipped (the gradients are discarded and the BatchNorm buffers restored, so
 the parameters, the optimiser state and the running statistics stay finite).
 The run stops and is reported as diverged after more than
 ``max_nonfinite_steps`` CONSECUTIVE skipped steps, or when the skipped steps
-exceed both ``max_nonfinite_steps`` and 1% of all steps; a rare overflowing
-outlier batch in a long run is skipped without ending it. A run that never
-took an optimiser step is diverged as well. For runs that stay finite the
-guard changes nothing.
+exceed both ``max_nonfinite_steps`` and 1% of the steps so far (skipped ones
+included); a rare overflowing outlier batch in a long run is skipped without
+ending it. A run that never took an optimiser
+step is diverged as well. For runs that stay finite the guard changes nothing.
+
+Models with a ``refresh_statistics(X, batch_size)`` method (LorentzNet) have
+their BatchNorm running statistics re-estimated from training batches before
+every validation pass.
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ class TrainConfig:
     cosine_schedule: bool = True
     early_stop_patience: int | None = None    # epochs without val-loss improvement
     restore_best: bool = True                 # with early stopping: reload the best-val-loss weights
-    max_nonfinite_steps: int = 20             # consecutive skipped steps before declaring divergence
+    max_nonfinite_steps: int = 20             # consecutive skips before divergence (also the floor of the total-skip limit)
     seed: int = 0
     device: str = "cpu"
 
@@ -112,9 +117,10 @@ def train_classifier(
     is the only loss; pass an extra regulariser via the model.
 
     Validation logits that are non-finite count as wrong predictions and
-    are left out of the validation loss; their fraction is logged per
-    epoch as ``val_nonfinite_frac``. Models with SO33 activations also
-    log the per-activation coefficient norms ``coeff_norms`` per epoch.
+    are left out of the validation loss; their fraction is logged, in every
+    epoch where it is non-zero, as ``val_nonfinite_frac``. Models with SO33
+    activations also log the per-activation coefficient norms
+    ``coeff_norms`` per epoch.
 
     With ``early_stop_patience`` set, training stops after that many epochs
     without a validation-loss improvement and (``restore_best``) the
