@@ -804,9 +804,12 @@ $\{T, \mathrm{step}\}$ within $\pm 30\%$ on the synthetic task.
 \paragraph{Per-experiment widths and epochs.} Table~\ref{tab:hp}
 summarizes the per-experiment settings. The matched-bottleneck width is
 $6$ for all such variants; natural-width MLPs use $256$; the
-\texttt{so33\_multi} variant uses $4$ parallel SO33 channels; the
-\texttt{eta\_invariants} and \texttt{so33\_equivariant} families use a
-small two-layer MLP head ($32$ hidden units).
+\texttt{so33\_multi} variant uses $4$ parallel SO33 channels. The
+\texttt{eta\_invariants} head is a $7$--$64$--$64$--$2$ ReLU MLP
+($4{,}802$ parameters); the \texttt{so33\_equivariant} family uses a
+$12$--$32$--$2$ ReLU head on four channels ($542$ parameters including
+the $60$ connection coefficients; $482$ trainable when the coefficients
+are frozen).
 
 \begin{table}[h]
   \centering

@@ -32,14 +32,41 @@ def _mean_std(xs: list[float]) -> tuple[float, float]:
     n = len(xs)
     m = sum(xs) / n
     if n == 1:
-        return m, 0.0
+        return m, float("nan")      # the sample sd is undefined for one seed
     var = sum((x - m) ** 2 for x in xs) / (n - 1)
     return m, math.sqrt(var)
 
 
+def _pm(ms: tuple[float, float], fmt: str = ".3f", n_of: tuple[int, int] | None = None,
+        signed: bool = False) -> str:
+    """'mean±sd' (sd shown as — for a single value); ``n_of=(k, n)`` appends ' (k/n)' if k < n."""
+    m, s = ms
+    text = f"{m:{'+' if signed else ''}{fmt}}±" + ("—" if math.isnan(s) else f"{s:{fmt}}")
+    return text if n_of is None or n_of[0] == n_of[1] else f"{text} ({n_of[0]}/{n_of[1]})"
+
+
+def _isnan(x: Any) -> bool:
+    return isinstance(x, float) and math.isnan(x)
+
+
+def is_diverged(r: dict[str, Any]) -> bool:
+    """A run whose model diverged: flagged by the guards, or (older records)
+    a NaN test AUC, which the harness produced from non-finite logits."""
+    tm = r.get("test_metrics", {})
+    return bool(r.get("diverged") or tm.get("diverged")
+                or _isnan(tm.get("test_auc")) or any(_isnan(r.get(k)) for k in ("id_auc", "ood_auc", "auc_gap")))
+
+
 def load_results(results_dir: pathlib.Path) -> list[dict[str, Any]]:
-    return [json.loads(p.read_text(encoding="utf-8"))
-            for p in sorted(results_dir.glob("*.json"))]
+    """Every readable record in the directory; an unreadable file (e.g. truncated by a
+    killed run) is reported and skipped instead of aborting the whole aggregation."""
+    out = []
+    for p in sorted(results_dir.glob("*.json")):
+        try:
+            out.append(json.loads(p.read_text(encoding="utf-8")))
+        except (OSError, ValueError) as e:
+            print(f"warning: skipping {p.name}: {e}", file=sys.stderr)
+    return out
 
 
 def group_by_experiment_model(records: list[dict]) -> dict[tuple[str, str], list[dict]]:
@@ -106,10 +133,11 @@ def render_dataeff(groups: dict[tuple[str, str], list[dict]]) -> str:
 def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
     """Render real-data tabular experiments (HIGGS / Top Tagging / Neutral).
 
-    Splits each experiment into matched-bottleneck, natural-width and
-    equivariant/invariant-set sub-tables based on the per-record
-    ``family`` field. Reports val_acc, test_acc, AUC and background
-    rejection 1/eps_B at eps_S=0.3 (when present).
+    Splits each experiment into matched-bottleneck, natural-width,
+    equivariant/invariant-set, published-tagger baseline and jet-observable
+    (cut / BDT / EFP) sub-tables based on the per-record ``family`` field.
+    Reports val_acc, test_acc, AUC and background rejection 1/eps_B at
+    eps_S=0.3 (when present).
     """
     tabular_experiments: dict[str, list[dict]] = defaultdict(list)
     for (exp, _model), recs in groups.items():
@@ -125,7 +153,8 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
         records = tabular_experiments[exp]
         out_lines.append(f"## {exp}")
         out_lines.append("")
-        for family in ("matched_bottleneck", "natural_width", "equivariant_set"):
+        for family in ("matched_bottleneck", "natural_width", "equivariant_set",
+                       "baseline_set", "jet_observable"):
             family_recs = [r for r in records if r["family"] == family]
             if not family_recs:
                 continue
@@ -142,6 +171,8 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
                 "matched_bottleneck": "matched bottleneck (hidden=6)",
                 "natural_width": "natural width MLPs",
                 "equivariant_set": "equivariant / invariant set models",
+                "baseline_set": "published-tagger baselines (~5k params)",
+                "jet_observable": "jet observables (no constituent network)",
             }[family]
             out_lines.append(f"### {label}")
             out_lines.append("")
@@ -154,39 +185,54 @@ def render_tabular(groups: dict[tuple[str, str], list[dict]]) -> str:
             out_lines.append("|" + "|".join(["---"] + ["---:"] * (len(header_cells) - 1)) + "|")
 
             rows = []
-            for model, recs in by_model.items():
-                n_params  = recs[0]["n_params"]
+            for model, all_recs in by_model.items():
+                n_params  = all_recs[0]["n_params"]
+                # Diverged seeds are reported as such, never averaged in
+                # (their accuracy is an argmax over NaN logits).
+                recs = [r for r in all_recs if not is_diverged(r)]
+                n_div = len(all_recs) - len(recs)
+                label = (model if n_div == 0
+                         else f"{model} ({n_div}/{len(all_recs)} diverged)")
+                if not recs:
+                    rows.append((label, len(all_recs), n_params, None, None,
+                                 None, None))
+                    continue
                 val_acc   = _mean_std([r["train_metrics"]["final_val_acc"] for r in recs])
                 test_acc  = _mean_std([r["test_metrics"]["test_acc"]       for r in recs])
-                if has_auc:
-                    test_auc = _mean_std([r["test_metrics"]["test_auc"]
-                                          for r in recs
-                                          if r["test_metrics"].get("test_auc") is not None])
-                else:
-                    test_auc = None
+                aucs = [r["test_metrics"]["test_auc"] for r in recs
+                        if r["test_metrics"].get("test_auc") is not None]
+                test_auc = (_mean_std(aucs), (len(aucs), len(recs))) if (has_auc and aucs) else None
                 # 1/eps_B is inf when a run separates the classes perfectly
                 # at eps_S=0.3; keep only finite values so one such seed does
                 # not turn the mean/std into inf/nan.
                 rej = [r["test_metrics"]["bg_rej_30"] for r in recs
                        if r["test_metrics"].get("bg_rej_30") is not None
                        and math.isfinite(r["test_metrics"]["bg_rej_30"])]
-                bg_rej = _mean_std(rej) if rej else None
-                rows.append((model, len(recs), n_params, val_acc, test_acc,
+                bg_rej = (_mean_std(rej), (len(rej), len(recs))) if rej else None
+                rows.append((label, len(all_recs), n_params, val_acc, test_acc,
                              test_auc, bg_rej))
 
             if has_auc:
-                rows.sort(key=lambda r: -(r[5][0] if r[5] else -1))
+                rows.sort(key=lambda r: -(r[5][0][0] if r[5] else -1))
             else:
-                rows.sort(key=lambda r: -r[4][0])
+                rows.sort(key=lambda r: -(r[4][0] if r[4] else -1))
 
             for model, n, p, v, t, a, rj in rows:
-                cells = [model, str(n), str(p),
-                         f"{v[0]:.3f}±{v[1]:.3f}",
-                         f"{t[0]:.3f}±{t[1]:.3f}"]
+                p = "—" if p is None else str(p)
+                if v is None:
+                    cells = [model, str(n), p, "—", "—"]
+                    if has_auc:
+                        cells.append("diverged")
+                    if has_rej:
+                        cells.append("—")
+                    out_lines.append("| " + " | ".join(cells) + " |")
+                    continue
+                cells = [model, str(n), p,
+                         _pm(v), _pm(t)]
                 if has_auc:
-                    cells.append(f"{a[0]:.3f}±{a[1]:.3f}" if a else "—")
+                    cells.append(_pm(a[0], ".3f", a[1]) if a else "—")
                 if has_rej:
-                    cells.append(f"{rj[0]:.0f}±{rj[1]:.0f}" if rj else "—")
+                    cells.append(_pm(rj[0], ".0f", rj[1]) if rj else "—")
                 out_lines.append("| " + " | ".join(cells) + " |")
             out_lines.append("")
     return "\n".join(out_lines)
@@ -218,6 +264,48 @@ def render_ood(groups: dict[tuple[str, str], list[dict]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_boost_ood(groups: dict[tuple[str, str], list[dict]]) -> str:
+    """Boost-OOD tables (Table 1): id / ood AUC and the gap, per model, one
+    table per experiment ("boost_ood" and its tagged variants, e.g. the
+    --connection-cap off ablation)."""
+    experiments = sorted({exp for exp, _ in groups
+                          if exp == "boost_ood" or exp.startswith("boost_ood-")})
+    return "\n".join(_render_boost_ood_one(groups, exp) for exp in experiments)
+
+
+def _render_boost_ood_one(groups: dict[tuple[str, str], list[dict]], experiment: str) -> str:
+    rows = []
+    for (exp, model), all_recs in groups.items():
+        if exp != experiment:
+            continue
+        recs = [r for r in all_recs if not is_diverged(r)]
+        n_div = len(all_recs) - len(recs)
+        label = model if n_div == 0 else f"{model} ({n_div}/{len(all_recs)} diverged)"
+        if not recs:
+            rows.append((label, len(all_recs), all_recs[0].get("n_params"), None, None, None))
+            continue
+        rows.append((label, len(all_recs), recs[0].get("n_params"),
+                     _mean_std([r["id_auc"] for r in recs]),
+                     _mean_std([r["ood_auc"] for r in recs]),
+                     _mean_std([r["auc_gap"] for r in recs])))
+    if not rows:
+        return ""
+    rows.sort(key=lambda r: -(r[4][0] if r[4] else -1))
+    lines = [
+        f"## {experiment}",
+        "",
+        "| model | n_seeds | params | id AUC | ood AUC | gap |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for model, n, p, i, o, g in rows:
+        if i is None:
+            lines.append(f"| {model} | {n} | {p} | — | diverged | — |")
+            continue
+        lines.append(f"| {model} | {n} | {p} | {_pm(i)} | {_pm(o)} | "
+                     f"{_pm(g, signed=True)} |")
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results-dir", type=str, default="results")
@@ -234,7 +322,8 @@ def main(argv: list[str] | None = None) -> int:
 
     records = load_results(results_dir)
     if args.experiment:
-        records = [r for r in records if r["experiment"] == args.experiment]
+        records = [r for r in records
+                   if isinstance(r, dict) and r.get("experiment") == args.experiment]
     if not records:
         print("No matching result files.", file=sys.stderr)
         return 1
@@ -245,6 +334,7 @@ def main(argv: list[str] | None = None) -> int:
     parts.append(render_equivariance(groups))
     parts.append(render_dataeff(groups))
     parts.append(render_ood(groups))
+    parts.append(render_boost_ood(groups))
     parts.append(render_tabular(groups))
     out = "\n".join(p for p in parts if p)
 

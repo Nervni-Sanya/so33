@@ -4,18 +4,25 @@ benchmarks.diagnose_equivariant
 Week-2 diagnostic: measure why `so33_equivariant` collapses to OOD AUC
 ~0.663 while `eta_invariants` (same lift, no SO33Activation) reaches 1.000.
 
-Working hypothesis (after code inspection):
+Hypothesis tested here:
     The `bound_input=True` flag in `SO33Activation` normalises inputs by
     1 + ||x||_2, where ||.||_2 is the Euclidean norm. The Euclidean norm
     is NOT an SO(3,3) invariant: a boost of rapidity phi scales it
     roughly by cosh(phi). At training rapidity ~0.6 the rescaling is
-    modest (~1.2x); at OOD rapidity ~2.5 it is ~6x. The activation's
-    apparent equivariance error therefore grows with input rapidity.
+    modest (~1.2x); at OOD rapidity ~2.5 it is ~6x. If the activation's
+    equivariance error grew with input rapidity, the OOD/ID ratio of the
+    error measured below would be >> 1.
+
+Outcome recorded for the paper: the ratio is ~0.9 (0.77 ID vs 0.72 OOD),
+so the activation-level error is NOT what separates ID from OOD. The OOD
+loss comes from the readout instead: with K = 1 the features are
+<beta(x), beta(x)>_eta = <x, x>_eta / (1 + ||x||_2)^2, which depends on
+the rapidity through ||x||_2 (see benchmarks.figure_boost_ood).
 
 This script trains `so33_equivariant` on the standard boost_ood setup,
 then measures the empirical activation-level equivariance error on
 freshly sampled inputs at the ID rapidity range and the OOD rapidity
-range, separately. Results are written to
+range, separately (``benchmarks.equivariance``). Results are written to
 results/diagnose_equivariant__seed{N}.json.
 
 Run:
@@ -35,6 +42,7 @@ from benchmarks.synthetic import (
     generate_boost_invariant_dataset,
     random_so33_element,
 )
+from benchmarks.equivariance import activation_equivariance
 from benchmarks.models import build_model, _lift_4to6
 from benchmarks.train import train_classifier, TrainConfig
 from so33.basis import DIM
@@ -58,8 +66,9 @@ def _measure_eq_error(
 
     For each sampled g in SO(3,3), compute
         err = || act(g x) - g act(x) ||_2  /  || act(x) ||_2
-    averaged over the batch. Aggregated mean and max over n_groups draws,
-    averaged over the activations.
+    averaged over the batch (``benchmarks.equivariance``). Mean and max
+    over the batch are averaged over the n_groups draws and over the
+    activations.
 
     Parameters
     ----------
@@ -77,32 +86,13 @@ def _measure_eq_error(
     p6 = _lift_4to6(p4)                            # (B, 1, 6)
     B = p6.shape[0]
     p_flat = p6.reshape(B, DIM)                    # (B, 6)
-
-    errs_per_g: list[float] = []
-    maxes_per_g: list[float] = []
-    for _ in range(n_groups):
-        g = random_so33_element(rapidity=rapidity_for_g,
-                                generator=generator, dtype=dtype)
-        gp = p_flat @ g.T                          # (B, 6)
-        per_act = []
-        per_act_max = []
-        for act in activations:
-            act.eval()
-            with torch.no_grad():
-                y    = act(p_flat)
-                y_g  = act(gp)
-                g_y  = y @ g.T
-                num  = (y_g - g_y).norm(dim=-1)
-                den  = y.norm(dim=-1).clamp_min(1e-12)
-                rel  = (num / den)
-                per_act.append(rel.mean().item())
-                per_act_max.append(rel.max().item())
-        errs_per_g.append(sum(per_act) / len(per_act))
-        maxes_per_g.append(sum(per_act_max) / len(per_act_max))
-
+    gs = [random_so33_element(rapidity=rapidity_for_g, generator=generator,
+                              dtype=dtype) for _ in range(n_groups)]
+    per_act = [activation_equivariance(act, p_flat, gs) for act in activations]
     return {
-        "mean_rel_err":  sum(errs_per_g)  / len(errs_per_g),
-        "max_rel_err":   sum(maxes_per_g) / len(maxes_per_g),
+        "mean_rel_err":  sum(r["eps_sigma"] for r in per_act) / len(per_act),
+        "max_rel_err":   sum(r["eps_sigma_max"] for r in per_act) / len(per_act),
+        "eps_m":         sum(r["eps_m"] for r in per_act) / len(per_act),
         "rapidity_test_groups": rapidity_for_g,
         "n_group_draws": n_groups,
         "n_inputs":      B,
@@ -203,10 +193,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  OOD/ID ratio of mean err : "
           f"{record['ratio_ood_over_id_meanerr']:.2f}x")
     print()
-    print("[diagnose] If the OOD/ID ratio is >> 1, the bound_input "
-          "hypothesis is supported: the Euclidean-norm normalisation "
-          "rescales boosted inputs more than ID inputs, so the activation "
-          "becomes input-rapidity-dependent.")
+    print("[diagnose] An OOD/ID ratio >> 1 would mean the activation-level "
+          "error grows with input rapidity. A ratio ~1 or below means it does "
+          "not: the OOD loss then comes from the rapidity-dependent readout "
+          "<beta(x), beta(x)>_eta of the Euclidean bound, not from the flow.")
 
     results_dir = pathlib.Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)

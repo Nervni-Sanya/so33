@@ -5,8 +5,12 @@ Generates two classes of 6-D trajectories with hidden so(3,3) symmetry:
   Class 0 — Lorentz boost connection  omega_{03}  (cross-signature, timelike)
   Class 1 — Spatial rotation connection omega_{01} (same-signature, spacelike)
 
-Trains SO33Network for 20 epochs and verifies training completes without
-errors. Accuracy should rise above chance by epoch 20.
+Trains SO33Network for 20 full-batch steps and asserts that the loop runs
+end to end: every loss and gradient is finite and the training loss
+decreases. It does NOT assert accuracy: at this input scale (v(0) ~
+N(0, 0.3^2)) the flow barely moves the inputs, and the classes are only
+weakly separable (a gradient-boosted tree reaches test AUC ~0.61 with 3,000
+training samples), so 70 samples cannot be classified above chance.
 
 Run:
     python tests/test_causal_classification.py
@@ -87,25 +91,27 @@ def test_causal_classification() -> None:
     print(f"\n  {'Epoch':>6}  {'Loss':>10}  {'Tr.Acc':>8}  {'Te.Acc':>8}")
     print(f"  {'─'*6}  {'─'*10}  {'─'*8}  {'─'*8}")
 
-    final_te_acc = 0.0
+    losses = []
     for epoch in range(1, 21):
         model.train()
         optimizer.zero_grad()
         logits = model(X_tr)
         loss   = criterion(logits, y_tr) + model.regularization_loss()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        assert torch.isfinite(loss) and torch.isfinite(grad_norm), f"non-finite at epoch {epoch}"
         optimizer.step()
+        losses.append(loss.item())
 
         if epoch % 4 == 0 or epoch == 1:
             with torch.no_grad():
                 tr_acc = (logits.argmax(1) == y_tr).float().mean().item()
                 te_acc = (model(X_te).argmax(1) == y_te).float().mean().item()
-                final_te_acc = te_acc
             print(f"  {epoch:>6}  {loss.item():>10.5f}  "
                   f"{tr_acc:>8.3f}  {te_acc:>8.3f}")
 
-    print("  ✓ Training loop completed")
+    assert losses[-1] < losses[0], f"training loss did not decrease: {losses[0]:.4f} -> {losses[-1]:.4f}"
+    print("  ✓ Training loop completed; loss decreased")
 
 
 if __name__ == "__main__":

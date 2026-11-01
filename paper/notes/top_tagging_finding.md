@@ -1,9 +1,37 @@
 # Top-tagging diagnosis (after week-2)
 
+> **Correction (after the JHEP referee report).** Two explanations in these
+> notes are wrong; the numbers they explain are not.
+> 1. *Architecture B did not "read out at chance".* Its records have test AUC
+>    NaN: the ODE diverged (non-finite logits; accuracy 0.50 is an argmax over
+>    NaN). Lifted massless constituents lie on the null cone, where neither
+>    beta_none nor beta_eta limits their norm, and with the legacy connection
+>    cap the flow overflows once ||c|| ~ 0.1 (growth law in `so33.activation`,
+>    threshold printed by `benchmarks.diagnose_archb_stability`). Its readout
+>    contains <sum h, sum h>_eta = -M_jet^2 at c = 0 (exactly for `_unbounded`,
+>    approximately for `_eta_bounded`, whose rescaling is ~1 on nearly massless
+>    constituents; the default Euclidean-bound variant sees the eta-norm of
+>    sum x_i/(1+|x_i|) instead), so a stably trained Architecture B of those
+>    two variants is at least a jet-mass tagger. Re-run it with the default
+>    `--connection-cap auto` (check first with
+>    `python -m benchmarks.diagnose_archb_stability --cache-dir data`).
+> 2. *The pairwise term is not the mechanism.* Constituents are massless
+>    (median |m^2/E^2| ~ 5e-8, float32 rounding), and the pooled pairwise mean
+>    is essentially M_jet^2 / n^2. A zero-parameter mass window
+>    -|M_jet - 172.5 GeV| on the same 32 constituents reaches AUC 0.941 on the
+>    canonical test set; eta_invariants (0.948) learns approximately that
+>    window. Compare against `python -m benchmarks.run_jet_baselines`.
+>
+> Also note that before the experiment-name fix the per-component run wrote
+> to the same `top_tagging_constituents__*` files as the global-scaling run,
+> so those single-seed baseline JSONs may be from either normalisation.
+
 ## Smoking-gun result -- CONFIRMED at full scale
 
 On 100k Kasieczka top-tagging constituents (70k train / 15k val /
-15k test, normalize=global, K=32 leading constituents, 30 epochs):
+15k test of the first 100k jets in sorted file-name order, i.e. of
+top_tagging_test.npz when all three files are present; normalize=global,
+K=32 leading constituents, 30 epochs):
 
 | model              | seed | val_acc | test_acc | test_auc | wall  |
 |--------------------|------|---------|----------|----------|-------|
@@ -30,6 +58,7 @@ so33_signature_only, all on the identical split. The old REPORT.md (now in notes
 numbers (0.749 / 0.738) reproduce within noise on the current loader,
 so the split refactor did NOT make the task easier -- the gap stands.
 
+[Superseded by correction 2 above: the pairwise term is not the mechanism.]
 The eta-invariants advantage comes from the **pairwise eta-inner
 products** s_ij = p_i.eta.p_j in its readout (mean, mean^2, max), which
 capture the multi-prong substructure that discriminates top jets from
@@ -37,7 +66,7 @@ QCD jets. The matched-bottleneck baselines (relu, so33_signature_only)
 only see per-particle features through a mean pool -- no pairwise term --
 so they plateau at ~0.75 regardless of the activation.
 
-## Why Arch B (so33_equivariant_*) also fails on top-tagging
+## Why Arch B (so33_equivariant_*) also fails on top-tagging [SUPERSEDED: it diverged to NaN, see correction 1]
 
 The week-2 run of so33_equivariant_unbounded AND
 so33_equivariant_eta_bounded both got test_acc=0.504 (chance level)
@@ -50,7 +79,8 @@ don't discriminate.
 
 The bound-vs-unbounded comparison is uninformative here because both
 variants run on the same expressivity-limited readout: |x.eta.x| is
-small on globally-normalised constituents (typical m/E ~ 1e-2), so
+small on globally-normalised constituents (median |m^2|/E^2 ~ 5e-8, i.e.
+m/E ~ 2e-4), so
 the eta-bound divisor 1+sqrt(small) ~ 1 doesn't actually bound
 anything -- it reduces to the unbounded case. Both architectures hit
 the same readout-feature wall.
@@ -64,7 +94,7 @@ full 100k benchmark. This is the paper's second real-data win
 (alongside the Adult parameter-efficiency result), and the strongest
 one numerically.
 
-### Arch B real-data story is honestly negative but understood
+### Arch B real-data story is honestly negative but understood [SUPERSEDED: see correction 1; the suggested text below is wrong]
 
 We can write:
 
@@ -80,8 +110,8 @@ We can write:
 ### Comparison to published top-tagging SOTA -- HANDLE WITH CARE
 
 This is the one place we must NOT overclaim. Published numbers:
-- LorentzNet, PELICAN report **AUC ~0.94** but those are usually
-  quoted as accuracy ~0.94 / AUC ~0.985+ on the **canonical Kasieczka
+- LorentzNet, PELICAN report accuracy ~0.94 and AUC ~0.987 (to be checked
+  against the papers before submission, see `paper/README.md`) on the **canonical Kasieczka
   test split** (all ~1.2M train / 400k test jets, evaluated on the
   held-out canonical test set).
 - Our 0.944 AUC is on a **70/15/15 internal split of the first 100k

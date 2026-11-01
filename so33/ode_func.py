@@ -6,12 +6,16 @@ ODEFunc: right-hand side of the geodesic-like ODE in R^{3,3}.
 The ODE:
     dv^mu / dt = -sum_{nu, lambda}  omega^mu_{nu lambda}  v^nu  v^lambda
 
-is a state-dependent quadratic vector field on R^{3,3}.  The quadratic term
-v x v (outer product) generates dynamics richer than any linear activation:
-possible limit cycles, symmetry-breaking bifurcations, and sensitivity to the
-causal structure of the initial condition.  Despite having no explicit metric
-in the equation, the geometry of R^{3,3} is encoded in the so(3,3)
-antisymmetry constraints on omega, which are enforced by construction in basis.py.
+is a state-dependent quadratic vector field on R^{3,3}. Two structural facts
+follow from its form:
+  * it is homogeneous of degree 2, so sigma_T(lambda x) = lambda sigma_{lambda T}(x):
+    rescaling the input is the same as changing the horizon (there are no
+    isolated periodic orbits, hence no limit cycles);
+  * the so(3,3) antisymmetry of omega (enforced by construction in basis.py)
+    makes it conserve <v, v>_eta for every connection, so the flow moves
+    along the level sets of the indefinite metric. On the null cone those
+    level sets are unbounded, which is why the norm cap matters
+    (see activation.py).
 """
 
 from __future__ import annotations

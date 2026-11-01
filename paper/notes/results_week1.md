@@ -1,5 +1,16 @@
 # Week-1 results — aggregated multi-seed numbers
 
+> **Status (after the referee audit, October 2026).** These are the week-1 numbers,
+> written before the corrections listed in the README ("Corrections"). Three readings
+> below are superseded, each marked "[Superseded]" where it occurs:
+> 1. Architecture B on top tagging did not read out "at chance": its records have test
+>    AUC NaN, the ODE diverged (see the correction in `top_tagging_finding.md`).
+> 2. The eta rescaling `1/(1+sqrt|x.eta.x|)` is not a bound (identity on the null cone,
+>    `so33/activation.py`); on top tagging the flow needs the connection cap
+>    (`--connection-cap auto`).
+> 3. The Adult "parameter-efficiency" reading of `so33_multi` is not evidence of an
+>    inductive bias (README, "Key findings"; controls in `paper/runs/week1.sh`).
+
 3 seeds per row (seeds 0, 1, 2). Means and standard deviations computed by
 hand from per-seed runs on the author's Windows box; per-seed JSON files
 are in `results/` on that box and should be copied into the repo's
@@ -30,17 +41,17 @@ Notes for the paper:
 - `so33_equivariant_unbounded` = the same Arch B with `bound_input=False`.
   Recovers OOD 1.000 +/- 0.000 across 3 seeds, matching `eta_invariants`.
   The +0.337 gap was an architectural flaw (Euclidean-norm bound breaks
-  SO(3,3) invariance via the readout denominator), not a limitation of
-  the equivariant lift + ODE approach.
+  SO(3,3) invariance via the readout denominator). With K = 1 the trained
+  connection collapses to c ~ 0 and the readout cannot see c, so this tests the
+  input map, not the flow.
 - `so33_equivariant_eta_bounded` = the principled fix: same Arch B with
   `bound_input="eta"`, dividing by `1 + sqrt(|x . eta . x|)`. This bound
   is itself SO(3,3)-invariant (x . eta . x is the indefinite-metric
   invariant). OOD 1.000 +/- 0.000 across 3 seeds; readout-feature
-  invariance verified at machine precision (1.4e-15). Compared to
-  `unbounded`, this variant ALSO bounds the input so the indefinite-
-  metric ODE stays stable -- pending top-tagging confirmation that
-  this is enough to prevent the geodesic divergence that motivated
-  bound_input in the first place.
+  invariance verified at machine precision (1.4e-15). [Superseded: the
+  rescaling is NOT a bound -- it is the identity on the null cone, so on top
+  tagging (massless constituents) the flow diverges without the connection
+  cap (`--connection-cap auto`); see the README, "Corrections".]
 - `so33_equivariant_frozen` (freeze coeffs): OOD 0.662, identical to the
   default -- confirms the failure is unrelated to *training* the
   connection (the coeffs collapse to ~0 anyway).
@@ -103,8 +114,11 @@ Notes for the paper:
 
 Notes for the paper:
 - **The real Adult story:** so33_multi beats best MLP by +0.007 AUC
-  (~3σ at std ~0.002) with ~10x fewer parameters. This is a paper-grade
-  parameter-efficiency claim.
+  (~3σ at std ~0.002) with ~10x fewer parameters. [Superseded: this is not
+  evidence of an inductive bias. The width-6 models in the table above
+  (650-665 parameters) already beat the unregularised width-256 MLPs; the
+  controls `tanh_mlp_w24` (2,594 parameters, vs 2,654 for so33_multi) and the
+  weight-decay / early-stopping MLPs in `paper/runs/week1.sh` test this.]
 - This contradicts the earlier matched-bottleneck framing of the Adult
   story. The win lives at the *natural-width vs natural-width* comparison,
   not matched-parameter.
@@ -117,15 +131,22 @@ Notes for the paper:
 
 (3 seeds; see top_tagging_finding.md.) Old non-invariant baselines on
 the same path were ~0.749 (relu) / 0.738 (so33_signature_only), but
-those predate a split refactor -- MUST re-run on the exact current
-loader before quoting the gap. so33_equivariant variants got 0.504
-(chance) due to a readout lacking pairwise eta-products.
+those predate a split refactor; on the exact current loader (seed 0) they
+are relu_bottleneck 0.759 and so33_signature_only 0.750 (see
+top_tagging_finding.md). [Superseded:] so33_equivariant variants got test_acc
+0.504 with test AUC NaN: the ODE diverged (non-finite logits; 0.50 is an argmax
+over NaN). It was not a chance-level readout, and not a readout lacking
+pairwise eta-products (see the correction in top_tagging_finding.md).
 
-CRITICAL caveat: this is a 70/15/15 internal split of 100k jets, NOT
-the canonical Kasieczka test split. Do NOT compare to LorentzNet /
-PELICAN published numbers -- they are far ahead on the real benchmark.
-See top_tagging_finding.md for the honest framing and the apples-to-
-apples baseline run still to do.
+CRITICAL caveat: this is a 70/15/15 internal split of 100k jets (the first
+100k in sorted file-name order, i.e. of top_tagging_test.npz when all three
+files are present), NOT the canonical Kasieczka protocol. Do NOT compare
+to LorentzNet / PELICAN published numbers -- they are far ahead on the
+real benchmark. See top_tagging_finding.md for the honest framing. The
+canonical-protocol run of eta_invariants has since been done (README, "Key
+findings"); the baselines under the same protocol (jet observables, EFPs,
+PFN/EFN, LorentzNet) are implemented and still have to be run
+(`paper/runs/week1.sh`).
 
 ## What this changes in the plan
 

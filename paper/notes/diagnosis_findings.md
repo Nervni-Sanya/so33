@@ -1,5 +1,18 @@
 # Week-2 findings -- diagnosis of `so33_equivariant` OOD failure
 
+> **Correction (after the JHEP referee report).** Read this note with three changes:
+> * The eta rescaling `x/(1+sqrt|x.eta.x|)` commutes with SO(3,3) but is NOT a bound:
+>   it is the identity on the null cone (`so33/activation.py`), so it does not give
+>   the stability that motivated `bound_input`. On top tagging the Architecture-B
+>   variants diverged without the connection cap (`top_tagging_finding.md`); the cap
+>   (`--connection-cap auto`) is the stabiliser.
+> * "Disabling `bound_input` is the entire fix" holds for the K = 1 boost-OOD task,
+>   where the trained connection collapses to c ~ 0 and the readout cannot see c. It
+>   tests the input map, not the flow, and says nothing about "the equivariant lift +
+>   ODE approach".
+> * The flow itself is SO(3,3)-equivariant only at c = 0, so `bound_input` is not the
+>   only source of non-equivariance in general (README, "Corrections").
+
 Three measurements run; bound_input hypothesis CONFIRMED via the
 direct ablation, REFINED by the diagnose-script results.
 
@@ -143,4 +156,6 @@ bound_input originally. That turns the paper's Arch B story from
 ## Status of the eta-invariant bound
 
 DONE on the implementation + synthetic side (see section above).
-Only the top-tagging-constituents stability confirmation remains.
+The top-tagging-constituents stability confirmation remained; it came out
+negative: the rescaling is the identity on the null cone, so both Architecture-B
+variants diverged without the connection cap (see the correction at the top).

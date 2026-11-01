@@ -6,7 +6,8 @@ End-to-end demonstration of SO33Activation and SO33Network.
 Run:
     python examples/demo_minimal.py
 
-Optional: install matplotlib for a loss curve plot.
+Optional: install matplotlib to save a loss curve to results/loss_curve.png
+(relative to the current directory; git-ignored).
     pip install matplotlib
 """
 
